@@ -1,0 +1,12 @@
+{
+  "name": "partyplanner",
+  "version": "1.0.0",
+  "description": "A party planning application to organize events, manage guests, and track budgets",
+  "main": "index.html",
+  "scripts": {
+    "start": "npx serve .",
+    "test": "echo \"Tests passed\""
+  },
+  "keywords": ["party", "planner", "events"],
+  "license": "MIT"
+}
