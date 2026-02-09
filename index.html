@@ -15,109 +15,106 @@
   </header>
 
   <nav>
-    <button class="nav-btn active" data-tab="dashboard">Dashboard</button>
-    <button class="nav-btn" data-tab="events">Events</button>
-    <button class="nav-btn" data-tab="guests">Guests</button>
-    <button class="nav-btn" data-tab="budget">Budget</button>
-    <button class="nav-btn" data-tab="tasks">Tasks</button>
+    <button class="nav-btn active" data-tab="planner">DIY AI Planner</button>
+    <button class="nav-btn" data-tab="guests">Guest List &amp; RSVP</button>
+    <button class="nav-btn" data-tab="budget">Budget Tracker</button>
+    <button class="nav-btn" data-tab="moodboard">Mood Board</button>
   </nav>
 
   <main>
-    <!-- Dashboard Tab -->
-    <section id="dashboard" class="tab-content active">
-      <h2>Dashboard</h2>
-      <div class="stats-grid">
-        <div class="stat-card">
-          <span class="stat-number" id="stat-events">0</span>
-          <span class="stat-label">Upcoming Events</span>
+    <!-- DIY AI Planner Tab -->
+    <section id="planner" class="tab-content active">
+      <!-- Landing State -->
+      <div id="planner-landing" class="planner-landing">
+        <div class="planner-hero">
+          <h2>What party do you want to plan?</h2>
+          <p class="planner-subtitle">Describe your dream event and our AI planner will help you bring it to life</p>
         </div>
-        <div class="stat-card">
-          <span class="stat-number" id="stat-guests">0</span>
-          <span class="stat-label">Total Guests</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-number" id="stat-budget">$0</span>
-          <span class="stat-label">Total Budget</span>
-        </div>
-        <div class="stat-card">
-          <span class="stat-number" id="stat-tasks">0</span>
-          <span class="stat-label">Pending Tasks</span>
-        </div>
-      </div>
-      <div class="upcoming-events">
-        <h3>Upcoming Events</h3>
-        <div id="dashboard-events-list" class="event-list-preview"></div>
-      </div>
-    </section>
-
-    <!-- Events Tab -->
-    <section id="events" class="tab-content">
-      <h2>Events</h2>
-      <button class="btn btn-primary" id="add-event-btn">+ New Event</button>
-      <div id="events-list" class="cards-grid"></div>
-
-      <!-- Event Form Modal -->
-      <div id="event-modal" class="modal hidden">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h3 id="event-modal-title">New Event</h3>
-            <button class="modal-close" data-modal="event-modal">&times;</button>
+        <div class="planner-prompt-container">
+          <div class="prompt-input-wrap">
+            <textarea id="planner-input" class="planner-input" rows="2" placeholder="Help me plan a &quot;A Little Cutie is on the Way&quot; themed baby shower..."></textarea>
+            <button id="planner-send-btn" class="btn btn-primary prompt-send-btn">Plan My Party</button>
           </div>
-          <form id="event-form">
-            <input type="hidden" id="event-id">
-            <div class="form-group">
-              <label for="event-name">Event Name</label>
-              <input type="text" id="event-name" required placeholder="e.g., Birthday Bash">
-            </div>
-            <div class="form-group">
-              <label for="event-date">Date</label>
-              <input type="date" id="event-date" required>
-            </div>
-            <div class="form-group">
-              <label for="event-time">Time</label>
-              <input type="time" id="event-time" required>
-            </div>
-            <div class="form-group">
-              <label for="event-location">Location</label>
-              <input type="text" id="event-location" required placeholder="e.g., Central Park">
-            </div>
-            <div class="form-group">
-              <label for="event-type">Event Type</label>
-              <select id="event-type">
-                <option value="birthday">Birthday Party</option>
-                <option value="wedding">Wedding</option>
-                <option value="corporate">Corporate Event</option>
-                <option value="holiday">Holiday Party</option>
-                <option value="dinner">Dinner Party</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label for="event-description">Description</label>
-              <textarea id="event-description" rows="3" placeholder="Describe your event..."></textarea>
-            </div>
-            <div class="form-actions">
-              <button type="button" class="btn btn-secondary" data-modal="event-modal">Cancel</button>
-              <button type="submit" class="btn btn-primary">Save Event</button>
-            </div>
-          </form>
+        </div>
+        <div class="quick-picks">
+          <p class="quick-picks-label">Or pick a party type to get started:</p>
+          <div class="quick-picks-grid">
+            <button class="quick-pick-btn" data-type="birthday">
+              <span class="quick-pick-icon">&#x1F382;</span>
+              <span>Birthday</span>
+            </button>
+            <button class="quick-pick-btn" data-type="wedding">
+              <span class="quick-pick-icon">&#x1F492;</span>
+              <span>Wedding</span>
+            </button>
+            <button class="quick-pick-btn" data-type="babyshower">
+              <span class="quick-pick-icon">&#x1F476;</span>
+              <span>Baby Shower</span>
+            </button>
+            <button class="quick-pick-btn" data-type="graduation">
+              <span class="quick-pick-icon">&#x1F393;</span>
+              <span>Graduation</span>
+            </button>
+            <button class="quick-pick-btn" data-type="retirement">
+              <span class="quick-pick-icon">&#x1F3C6;</span>
+              <span>Retirement</span>
+            </button>
+            <button class="quick-pick-btn" data-type="holiday">
+              <span class="quick-pick-icon">&#x1F384;</span>
+              <span>Holiday Party</span>
+            </button>
+            <button class="quick-pick-btn" data-type="dinner">
+              <span class="quick-pick-icon">&#x1F37D;</span>
+              <span>Dinner Party</span>
+            </button>
+            <button class="quick-pick-btn" data-type="anniversary">
+              <span class="quick-pick-icon">&#x1F495;</span>
+              <span>Anniversary</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Chat State -->
+      <div id="planner-chat" class="planner-chat hidden">
+        <div class="chat-header">
+          <button id="planner-restart-btn" class="btn btn-secondary btn-sm">New Plan</button>
+          <h3 id="planner-party-title">Party Planner</h3>
+          <button id="toggle-bucket-btn" class="btn btn-primary btn-sm">Party Bucket (<span id="bucket-count-header">0</span>)</button>
+        </div>
+        <div id="chat-messages" class="chat-messages"></div>
+        <div class="chat-input-container">
+          <textarea id="chat-input" class="chat-input" rows="1" placeholder="Type your response..."></textarea>
+          <button id="chat-send-btn" class="btn btn-primary chat-send-btn">Send</button>
+        </div>
+      </div>
+
+      <!-- Party Bucket Panel -->
+      <div id="party-bucket-panel" class="party-bucket-panel hidden">
+        <div class="bucket-header">
+          <h3>Party Bucket</h3>
+          <button id="close-bucket-btn" class="btn btn-secondary btn-sm">Close</button>
+        </div>
+        <div id="bucket-items" class="bucket-items"></div>
+        <div class="bucket-footer">
+          <div class="bucket-total">
+            Estimated Total: <strong id="bucket-total-price">$0.00</strong>
+          </div>
         </div>
       </div>
     </section>
 
-    <!-- Guests Tab -->
+    <!-- Guest List & RSVP Tab -->
     <section id="guests" class="tab-content">
-      <h2>Guests</h2>
+      <h2>Guest List &amp; RSVP Tracker</h2>
       <div class="guest-controls">
-        <select id="guest-event-filter">
-          <option value="">Select an event...</option>
-        </select>
-        <button class="btn btn-primary" id="add-guest-btn" disabled>+ Add Guest</button>
+        <button class="btn btn-primary" id="add-guest-btn">+ Add Guest</button>
       </div>
       <div id="guest-summary" class="guest-summary hidden">
         <span class="badge badge-confirmed" id="confirmed-count">0 Confirmed</span>
         <span class="badge badge-pending" id="pending-count">0 Pending</span>
         <span class="badge badge-declined" id="declined-count">0 Declined</span>
+        <span class="badge badge-total" id="total-people-count">0 Total People</span>
       </div>
       <div id="guests-list" class="guests-table-container"></div>
 
@@ -130,7 +127,6 @@
           </div>
           <form id="guest-form">
             <input type="hidden" id="guest-id">
-            <input type="hidden" id="guest-event-id">
             <div class="form-group">
               <label for="guest-name">Name</label>
               <input type="text" id="guest-name" required placeholder="Full name">
@@ -140,16 +136,16 @@
               <input type="email" id="guest-email" placeholder="email@example.com">
             </div>
             <div class="form-group">
-              <label for="guest-rsvp">RSVP Status</label>
-              <select id="guest-rsvp">
-                <option value="pending">Pending</option>
-                <option value="confirmed">Confirmed</option>
-                <option value="declined">Declined</option>
-              </select>
+              <label for="guest-num-people">Number of People</label>
+              <input type="number" id="guest-num-people" min="1" value="1" required placeholder="1">
             </div>
             <div class="form-group">
-              <label for="guest-dietary">Dietary Restrictions</label>
-              <input type="text" id="guest-dietary" placeholder="e.g., Vegetarian, Gluten-free">
+              <label for="guest-rsvp">RSVP</label>
+              <select id="guest-rsvp">
+                <option value="pending">Pending</option>
+                <option value="yes">Yes</option>
+                <option value="no">No</option>
+              </select>
             </div>
             <div class="form-actions">
               <button type="button" class="btn btn-secondary" data-modal="guest-modal">Cancel</button>
@@ -160,22 +156,25 @@
       </div>
     </section>
 
-    <!-- Budget Tab -->
+    <!-- Budget Tracker Tab -->
     <section id="budget" class="tab-content">
-      <h2>Budget</h2>
+      <h2>Budget Tracker</h2>
       <div class="budget-controls">
-        <select id="budget-event-filter">
-          <option value="">Select an event...</option>
-        </select>
-        <button class="btn btn-primary" id="add-expense-btn" disabled>+ Add Expense</button>
+        <div class="budget-set">
+          <label for="budget-limit">Total Budget: $</label>
+          <input type="number" id="budget-limit" min="0" step="1" placeholder="0" value="0">
+          <button class="btn btn-secondary btn-sm" id="set-budget-btn">Set</button>
+        </div>
+        <button class="btn btn-primary" id="add-expense-btn">+ Add Expense</button>
       </div>
-      <div id="budget-overview" class="budget-overview hidden">
+      <div id="budget-overview" class="budget-overview">
         <div class="budget-bar-container">
           <div class="budget-bar" id="budget-bar"></div>
         </div>
         <div class="budget-stats">
-          <span>Spent: <strong id="budget-spent">$0</strong></span>
-          <span>Budget: <strong id="budget-total-display">$0</strong></span>
+          <span>Spent: <strong id="budget-spent">$0.00</strong></span>
+          <span>Remaining: <strong id="budget-remaining">$0.00</strong></span>
+          <span>Budget: <strong id="budget-total-display">$0.00</strong></span>
         </div>
       </div>
       <div id="expenses-list" class="cards-grid"></div>
@@ -189,7 +188,6 @@
           </div>
           <form id="expense-form">
             <input type="hidden" id="expense-id">
-            <input type="hidden" id="expense-event-id">
             <div class="form-group">
               <label for="expense-category">Category</label>
               <select id="expense-category">
@@ -199,12 +197,13 @@
                 <option value="entertainment">Entertainment</option>
                 <option value="photography">Photography</option>
                 <option value="invitations">Invitations</option>
+                <option value="supplies">Party Supplies</option>
                 <option value="other">Other</option>
               </select>
             </div>
             <div class="form-group">
               <label for="expense-description">Description</label>
-              <input type="text" id="expense-description" required placeholder="e.g., DJ for 4 hours">
+              <input type="text" id="expense-description" required placeholder="e.g., Themed paper cups set of 100">
             </div>
             <div class="form-group">
               <label for="expense-amount">Amount ($)</label>
@@ -224,50 +223,11 @@
       </div>
     </section>
 
-    <!-- Tasks Tab -->
-    <section id="tasks" class="tab-content">
-      <h2>Tasks</h2>
-      <div class="task-controls">
-        <select id="task-event-filter">
-          <option value="">Select an event...</option>
-        </select>
-        <button class="btn btn-primary" id="add-task-btn" disabled>+ Add Task</button>
-      </div>
-      <div id="tasks-list" class="tasks-container"></div>
-
-      <!-- Task Form Modal -->
-      <div id="task-modal" class="modal hidden">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h3 id="task-modal-title">Add Task</h3>
-            <button class="modal-close" data-modal="task-modal">&times;</button>
-          </div>
-          <form id="task-form">
-            <input type="hidden" id="task-id">
-            <input type="hidden" id="task-event-id">
-            <div class="form-group">
-              <label for="task-title">Task</label>
-              <input type="text" id="task-title" required placeholder="e.g., Book the venue">
-            </div>
-            <div class="form-group">
-              <label for="task-due">Due Date</label>
-              <input type="date" id="task-due">
-            </div>
-            <div class="form-group">
-              <label for="task-priority">Priority</label>
-              <select id="task-priority">
-                <option value="low">Low</option>
-                <option value="medium" selected>Medium</option>
-                <option value="high">High</option>
-              </select>
-            </div>
-            <div class="form-actions">
-              <button type="button" class="btn btn-secondary" data-modal="task-modal">Cancel</button>
-              <button type="submit" class="btn btn-primary">Save Task</button>
-            </div>
-          </form>
-        </div>
-      </div>
+    <!-- Mood Board Tab -->
+    <section id="moodboard" class="tab-content">
+      <h2>Mood Board</h2>
+      <p class="moodboard-subtitle">Your saved inspiration items from the AI Planner. Click items to add them to your Party Bucket.</p>
+      <div id="moodboard-grid" class="moodboard-grid"></div>
     </section>
   </main>
 
