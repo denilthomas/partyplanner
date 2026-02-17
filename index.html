@@ -11,8 +11,30 @@
     <div class="header-content">
       <h1>PartyPlanner</h1>
       <p class="tagline">Plan. Invite. Celebrate.</p>
+      <button id="settings-btn" class="settings-btn" title="Settings">&#x2699;</button>
     </div>
   </header>
+
+  <!-- Settings Modal -->
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h3>Settings</h3>
+        <button class="modal-close" data-modal="settings-modal">&times;</button>
+      </div>
+      <form id="settings-form">
+        <div class="form-group">
+          <label for="openai-key">OpenAI API Key (for AI-generated mood board images)</label>
+          <input type="password" id="openai-key" placeholder="sk-...">
+          <p class="form-hint">Get your key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>. Costs ~$0.04 per image. Key is stored locally in your browser only.</p>
+        </div>
+        <div class="form-actions">
+          <button type="button" class="btn btn-secondary" data-modal="settings-modal">Cancel</button>
+          <button type="submit" class="btn btn-primary">Save Settings</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <nav>
     <button class="nav-btn active" data-tab="planner">DIY AI Planner</button>
@@ -226,7 +248,11 @@
     <!-- Mood Board Tab -->
     <section id="moodboard" class="tab-content">
       <h2>Mood Board</h2>
-      <p class="moodboard-subtitle">Your saved inspiration items from the AI Planner. Click items to add them to your Party Bucket.</p>
+      <p class="moodboard-subtitle">Your saved inspiration and uploaded images. Add items to your Party Bucket or upload your own.</p>
+      <div class="moodboard-controls">
+        <button class="btn btn-primary" id="upload-image-btn">+ Upload Image</button>
+        <input type="file" id="upload-image-input" accept="image/*" multiple style="display:none">
+      </div>
       <div id="moodboard-grid" class="moodboard-grid"></div>
     </section>
   </main>
