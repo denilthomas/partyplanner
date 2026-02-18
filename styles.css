@@ -1311,6 +1311,148 @@ footer {
   }
 }
 
+/* ══════════════════════════════
+   Inspiration Scene Grid
+   ══════════════════════════════ */
+
+.inspiration-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 1rem;
+  margin: 1rem 0;
+}
+
+.inspiration-card {
+  position: relative;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #fff;
+  border: 2px solid #e0e0e0;
+  cursor: pointer;
+  transition: transform 0.2s, border-color 0.2s, box-shadow 0.2s;
+}
+
+.inspiration-card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+  border-color: #c0c0c0;
+}
+
+.inspiration-card.selected {
+  border-color: #6c5ce7;
+  box-shadow: 0 4px 16px rgba(108, 92, 231, 0.3);
+}
+
+.inspiration-card.selected .inspiration-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.inspiration-visual {
+  width: 100%;
+  height: 180px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #ffecd2, #fcb69f);
+  overflow: hidden;
+}
+
+.inspiration-visual img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.inspiration-emoji {
+  font-size: 3rem;
+}
+
+.inspiration-check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: #6c5ce7;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1rem;
+  font-weight: bold;
+  opacity: 0;
+  transform: scale(0.5);
+  transition: opacity 0.2s, transform 0.2s;
+  z-index: 2;
+}
+
+.inspiration-info {
+  padding: 0.75rem;
+}
+
+.inspiration-name {
+  display: block;
+  font-weight: 600;
+  font-size: 0.95rem;
+  margin-bottom: 0.25rem;
+  color: #2d3436;
+}
+
+.inspiration-desc {
+  display: block;
+  font-size: 0.8rem;
+  color: #636e72;
+  line-height: 1.35;
+}
+
+.inspiration-actions {
+  text-align: center;
+  margin-top: 1rem;
+}
+
+.inspiration-continue-btn {
+  padding: 0.75rem 2rem;
+  font-size: 1rem;
+  font-weight: 600;
+  border-radius: 30px;
+}
+
+.inspiration-continue-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: #b2bec3;
+}
+
+@media (max-width: 640px) {
+  .inspiration-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+  }
+
+  .inspiration-visual {
+    height: 130px;
+  }
+
+  .inspiration-emoji {
+    font-size: 2rem;
+  }
+
+  .inspiration-name {
+    font-size: 0.85rem;
+  }
+
+  .inspiration-desc {
+    font-size: 0.72rem;
+  }
+
+  .inspiration-continue-btn {
+    padding: 0.6rem 1.5rem;
+    font-size: 0.9rem;
+  }
+}
+
 /* ── Utility ── */
 
 .hidden {

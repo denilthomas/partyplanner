@@ -15,7 +15,7 @@
       moodBoardItems: [],
       plannerState: null,
       chatHistory: [],
-      uploadedImages: [], // { id, name, timestamp }
+      uploadedImages: [],
     };
     try {
       const raw = localStorage.getItem('partyplanner');
@@ -51,7 +51,6 @@
     }
   }
 
-  // Settings modal wiring
   const settingsBtn = document.getElementById('settings-btn');
   const settingsForm = document.getElementById('settings-form');
   const openaiKeyInput = document.getElementById('openai-key');
@@ -248,7 +247,6 @@
     }
   }
 
-  // Build a descriptive prompt for party decor images
   function buildImagePrompt(itemName, partyType, theme) {
     const typeLabel = partyTypeLabels[partyType] || 'party';
     const themeDesc = theme ? ` with a "${theme}" theme` : '';
@@ -256,100 +254,475 @@
   }
 
   // ══════════════════════════════════════
-  //  PRE-CURATED THEME IMAGES
+  //  INSPIRATION SCENE CATALOG
   // ══════════════════════════════════════
+  //
+  // Each scene represents a visual "look" — a curated decor setup.
+  // Scenes have pre-tagged products so we can recommend items
+  // based on which scenes the user loves.
 
-  // Curated image descriptions for AI generation, keyed by partyType
-  // These serve as the "pre-curated catalog" - when an API key is present,
-  // images are generated on demand and cached in IndexedDB
-  const curatedImagePrompts = {
-    birthday: {
-      decorations: 'Colorful birthday party table setup with balloons, streamers, and confetti, festive atmosphere',
-      tableware: 'Beautiful birthday party table setting with themed plates, cups, and napkins arranged elegantly',
-      favors: 'Cute birthday party favor bags filled with treats and small toys, wrapped with ribbons',
-      baking: 'Decorated birthday cupcakes and cake with frosting and sprinkles on a party table',
-      entertainment: 'Fun photo booth props for birthday party including hats, glasses, and signs',
-      accessories: 'Sparkly birthday party accessories including crowns, hats, and tiaras on display',
-    },
-    wedding: {
-      decorations: 'Elegant wedding reception table with white flowers, candles, and gold accents',
-      stationery: 'Beautiful calligraphy wedding place cards and invitations with floral details',
-      tableware: 'Crystal champagne flutes and fine china on a wedding reception table',
-      favors: 'Elegant wedding favor boxes with ribbons and flowers arranged on a white table',
-      accessories: 'Wedding cake cutting set with silver handles and crystal details',
-      entertainment: 'Wedding bubble tubes and sparklers arranged in a decorative display',
-    },
-    babyshower: {
-      decorations: 'Pastel baby shower decorations with balloons, banner, and stuffed animals',
-      tableware: 'Adorable baby shower table setting with themed plates and cups in soft colors',
-      entertainment: 'Baby shower game cards and activity stations set up on decorated table',
-      favors: 'Sweet baby shower favor bags with tiny baby items and thank you tags',
-      baking: 'Baby-themed cupcakes with booties, rattles, and onesie decorations on top',
-      accessories: 'Mommy-to-be sash and tiara set in pink or blue with sparkle details',
-      stationery: 'Baby shower advice cards and wishes cards with cute illustrations',
-    },
-    graduation: {
-      decorations: 'Graduation party decorations with cap-shaped balloons and congratulations banner',
-      tableware: 'Graduation party table with themed plates and cups in school colors',
-      favors: 'Graduation party favor boxes with diploma roll decorations and treats inside',
-      stationery: 'Graduation guest signing board with space for well-wishes and photos',
-      entertainment: 'Graduation photo display with pictures from kindergarten through senior year',
-    },
-    retirement: {
-      decorations: 'Elegant retirement party decorations with gold and black balloons and banner',
-      tableware: 'Sophisticated retirement party table setting with gold-rimmed plates and cups',
-      stationery: 'Retirement memory book and guestbook with gold pen on decorated table',
-      favors: 'Retirement party favor bags with gold tissue paper and thank you tags',
-    },
-    holiday: {
-      decorations: 'Festive holiday party table with garland, ornaments, and twinkling lights',
-      tableware: 'Holiday themed plates, cups, and napkins with seasonal patterns and colors',
-      baking: 'Holiday cookie decorating station with various shapes, icing, and sprinkles',
-      favors: 'Holiday party favor tins filled with homemade treats and tied with ribbon',
-    },
-    dinner: {
-      decorations: 'Sophisticated dinner party centerpiece with candles, flowers, and greenery',
-      tableware: 'Elegant dinner party place setting with charger plates, wine glasses, and linen napkins',
-      stationery: 'Handwritten dinner party menu cards and place cards with calligraphy',
-      accessories: 'Cocktail stirrers and drink garnishes arranged beautifully on a bar cart',
-    },
-    anniversary: {
-      decorations: 'Romantic anniversary party setup with rose petals, fairy lights, and candles',
-      tableware: 'Anniversary celebration table with champagne flutes and gold-rimmed plates',
-      stationery: 'Anniversary photo timeline display with pictures from throughout the years',
-      favors: 'Romantic anniversary favor boxes with hearts and gold ribbon accents',
-    },
+  const inspirationScenes = {
+    birthday: [
+      {
+        id: 'bday-balloon-arch',
+        name: 'Balloon Arch Entrance',
+        description: 'A dramatic balloon arch in themed colors welcoming guests at the entrance',
+        emoji: '\u{1F388}\u{1F38A}',
+        imagePrompt: 'Beautiful balloon arch entrance for a birthday party with colorful balloons in pink gold and white, party entrance decoration, professional event photography',
+        products: [
+          { name: 'Balloon Arch Kit', emoji: '\u{1F388}', price: 24.99, category: 'decorations' },
+          { name: 'Balloon Pump', emoji: '\u{1F4A8}', price: 12.99, category: 'decorations' },
+          { name: 'Metallic Gold Balloons Pack of 50', emoji: '\u{1F388}', price: 9.99, category: 'decorations' },
+          { name: 'Balloon Decorating Strip 25ft', emoji: '\u{1F380}', price: 6.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'bday-dessert-table',
+        name: 'Themed Dessert Table',
+        description: 'A beautifully styled dessert table with cake, cupcakes, and coordinated treats',
+        emoji: '\u{1F382}\u{1F9C1}',
+        imagePrompt: 'Stunning birthday dessert table with tiered cake, cupcakes, cake pops, candy jars, themed decorations, professional party photography',
+        products: [
+          { name: 'Tiered Cake Stand', emoji: '\u{1F382}', price: 22.99, category: 'tableware' },
+          { name: 'Cupcake Tower Display', emoji: '\u{1F9C1}', price: 18.99, category: 'tableware' },
+          { name: 'Cake Topper', emoji: '\u{2728}', price: 8.99, category: 'decorations' },
+          { name: 'Dessert Table Backdrop', emoji: '\u{1F3A8}', price: 19.99, category: 'decorations' },
+          { name: 'Candy Jars Set of 6', emoji: '\u{1F36C}', price: 14.99, category: 'tableware' },
+        ],
+      },
+      {
+        id: 'bday-table-setting',
+        name: 'Coordinated Table Setting',
+        description: 'Matching plates, cups, napkins, and centerpieces in your party theme',
+        emoji: '\u{1F37D}\u{1F3A8}',
+        imagePrompt: 'Beautiful themed birthday party table setting with coordinated plates cups napkins centerpieces and party favors, overhead shot, professional event styling',
+        products: [
+          { name: 'Themed Paper Plates Set of 24', emoji: '\u{1F37D}', price: 12.99, category: 'tableware' },
+          { name: 'Themed Paper Cups Set of 24', emoji: '\u{1F964}', price: 9.99, category: 'tableware' },
+          { name: 'Themed Napkins Set of 50', emoji: '\u{1F9FB}', price: 8.99, category: 'tableware' },
+          { name: 'Tablecloth Pack of 3', emoji: '\u{1F3A8}', price: 14.99, category: 'decorations' },
+          { name: 'Table Centerpiece', emoji: '\u{1F490}', price: 16.99, category: 'decorations' },
+          { name: 'Plastic Utensils Set of 72', emoji: '\u{1F374}', price: 10.99, category: 'tableware' },
+        ],
+      },
+      {
+        id: 'bday-photo-zone',
+        name: 'Photo Booth & Backdrop',
+        description: 'An Instagram-worthy photo zone with props, backdrop, and fun accessories',
+        emoji: '\u{1F4F8}\u{1F451}',
+        imagePrompt: 'Fun birthday party photo booth with backdrop, props, balloons and string lights, colorful and Instagram-worthy, professional party setup',
+        products: [
+          { name: 'Photo Booth Backdrop 5x7ft', emoji: '\u{1F4F8}', price: 18.99, category: 'decorations' },
+          { name: 'Photo Booth Props Kit 30pc', emoji: '\u{1F451}', price: 12.49, category: 'entertainment' },
+          { name: 'String Lights 20ft', emoji: '\u{1F4A1}', price: 14.99, category: 'decorations' },
+          { name: 'Polaroid Guest Book Set', emoji: '\u{1F4D6}', price: 16.99, category: 'stationery' },
+        ],
+      },
+      {
+        id: 'bday-party-favors',
+        name: 'Party Favor Station',
+        description: 'A curated display of thank-you bags, treats, and small gifts for guests',
+        emoji: '\u{1F381}\u{1F36D}',
+        imagePrompt: 'Beautiful party favor station with decorated gift bags, candy, small toys, and thank you tags displayed on a styled table, professional event photography',
+        products: [
+          { name: 'Party Favor Bags Pack of 24', emoji: '\u{1F381}', price: 13.99, category: 'favors' },
+          { name: 'Favor Tags & Ribbon Set', emoji: '\u{1F380}', price: 7.99, category: 'favors' },
+          { name: 'Mini Candy Bags 50pc', emoji: '\u{1F36C}', price: 9.99, category: 'favors' },
+          { name: 'Party Hats Pack of 12', emoji: '\u{1F451}', price: 8.99, category: 'accessories' },
+        ],
+      },
+      {
+        id: 'bday-hanging-decor',
+        name: 'Ceiling & Hanging Decor',
+        description: 'Paper lanterns, streamers, and hanging decorations transforming the space',
+        emoji: '\u{1F3AA}\u{1F38A}',
+        imagePrompt: 'Beautiful ceiling decorations for birthday party with paper lanterns, streamers, hanging tissue pom poms and garlands in coordinated colors, looking up perspective',
+        products: [
+          { name: 'Paper Lanterns Set of 10', emoji: '\u{1F3AA}', price: 14.99, category: 'decorations' },
+          { name: 'Tissue Pom Poms Pack of 12', emoji: '\u{1F338}', price: 11.99, category: 'decorations' },
+          { name: 'Crepe Streamers 6 Rolls', emoji: '\u{1F38A}', price: 8.99, category: 'decorations' },
+          { name: 'Birthday Banner Garland', emoji: '\u{1F389}', price: 10.99, category: 'decorations' },
+          { name: 'Confetti Scatter Pack', emoji: '\u{1F38A}', price: 6.99, category: 'decorations' },
+        ],
+      },
+    ],
+    wedding: [
+      {
+        id: 'wed-ceremony-arch',
+        name: 'Ceremony Arch & Flowers',
+        description: 'A stunning floral arch as the centerpiece of the ceremony',
+        emoji: '\u{1F490}\u{1F492}',
+        imagePrompt: 'Beautiful wedding ceremony arch decorated with white and blush flowers, greenery, and flowing fabric, outdoor setting, professional wedding photography',
+        products: [
+          { name: 'Wedding Arch Frame', emoji: '\u{1F492}', price: 45.99, category: 'decorations' },
+          { name: 'Artificial Flower Garland 2-pack', emoji: '\u{1F490}', price: 28.99, category: 'decorations' },
+          { name: 'Sheer Draping Fabric 10 yards', emoji: '\u{1F380}', price: 16.99, category: 'decorations' },
+          { name: 'Greenery Garland 12ft', emoji: '\u{1F33F}', price: 18.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'wed-reception-table',
+        name: 'Elegant Reception Table',
+        description: 'Candlelit reception tables with floral runners, place settings, and gold accents',
+        emoji: '\u{1F56F}\u{1F942}',
+        imagePrompt: 'Elegant wedding reception table with candles, floral centerpiece, gold charger plates, crystal champagne flutes, and silk table runner, warm lighting, professional wedding photography',
+        products: [
+          { name: 'Gold Charger Plates Set of 12', emoji: '\u{1F37D}', price: 34.99, category: 'tableware' },
+          { name: 'Champagne Flutes Pack of 12', emoji: '\u{1F942}', price: 24.99, category: 'tableware' },
+          { name: 'Pillar Candle Holders Set of 12', emoji: '\u{1F56F}', price: 28.99, category: 'decorations' },
+          { name: 'Silk Table Runner 5-pack', emoji: '\u{1F3A8}', price: 22.99, category: 'decorations' },
+          { name: 'Place Card Holders Set of 24', emoji: '\u{1F4DD}', price: 14.99, category: 'stationery' },
+          { name: 'Table Numbers 1-25', emoji: '\u{1F522}', price: 12.99, category: 'stationery' },
+        ],
+      },
+      {
+        id: 'wed-cake-display',
+        name: 'Wedding Cake Display',
+        description: 'An elegant multi-tier cake on a decorated table with cake cutting set',
+        emoji: '\u{1F382}\u{2728}',
+        imagePrompt: 'Beautiful multi-tier white wedding cake on decorated cake table with flowers, cake cutting set, and elegant backdrop, professional wedding photography',
+        products: [
+          { name: 'Cake Stand Pedestal', emoji: '\u{1F382}', price: 26.99, category: 'tableware' },
+          { name: 'Cake Cutting Set', emoji: '\u{1F52A}', price: 18.99, category: 'accessories' },
+          { name: 'Cake Topper', emoji: '\u{2728}', price: 12.99, category: 'decorations' },
+          { name: 'Dessert Plates Set of 50', emoji: '\u{1F37D}', price: 14.99, category: 'tableware' },
+        ],
+      },
+      {
+        id: 'wed-aisle-decor',
+        name: 'Aisle & Seating Decor',
+        description: 'Rose petals down the aisle, chair sashes, and aisle markers',
+        emoji: '\u{1F339}\u{1F380}',
+        imagePrompt: 'Wedding aisle decorated with rose petals, chair sashes, aisle markers with flowers and lanterns, white chairs, professional wedding photography',
+        products: [
+          { name: 'Rose Petals 2000 pcs', emoji: '\u{1F339}', price: 14.99, category: 'decorations' },
+          { name: 'Chair Sashes Pack of 25', emoji: '\u{1F380}', price: 19.99, category: 'decorations' },
+          { name: 'Aisle Runner 100ft', emoji: '\u{1F3A8}', price: 16.99, category: 'decorations' },
+          { name: 'Lantern Aisle Markers Set of 6', emoji: '\u{1F56F}', price: 24.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'wed-guest-favors',
+        name: 'Guest Favors & Keepsakes',
+        description: 'Beautifully wrapped favors, a guest book, and bubbles for the send-off',
+        emoji: '\u{1F381}\u{1F4D6}',
+        imagePrompt: 'Elegant wedding favor table with wrapped favor boxes, guest book with pen, and bubble tubes, white and gold theme, professional wedding photography',
+        products: [
+          { name: 'Wedding Favor Boxes Set of 50', emoji: '\u{1F381}', price: 19.99, category: 'favors' },
+          { name: 'Guest Book & Pen Set', emoji: '\u{1F4D6}', price: 22.99, category: 'stationery' },
+          { name: 'Wedding Bubbles Set of 48', emoji: '\u{1FAE7}', price: 12.99, category: 'entertainment' },
+          { name: 'Satin Ribbon 100 yards', emoji: '\u{1F380}', price: 9.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'wed-fairy-lights',
+        name: 'Fairy Lights & Ambiance',
+        description: 'Twinkling fairy lights, candles, and tulle creating a magical atmosphere',
+        emoji: '\u{2728}\u{1F56F}',
+        imagePrompt: 'Magical wedding venue with fairy lights draped from ceiling, candles on tables, tulle decorations, warm romantic ambiance, professional wedding photography',
+        products: [
+          { name: 'Fairy Lights 100ft', emoji: '\u{2728}', price: 26.99, category: 'decorations' },
+          { name: 'LED Tea Light Candles 36-pack', emoji: '\u{1F56F}', price: 14.99, category: 'decorations' },
+          { name: 'Tulle Roll 100 yards', emoji: '\u{1F3A8}', price: 11.99, category: 'decorations' },
+          { name: 'Hanging Glass Votives Set of 12', emoji: '\u{2728}', price: 19.99, category: 'decorations' },
+        ],
+      },
+    ],
+    babyshower: [
+      {
+        id: 'bs-dessert-table',
+        name: 'Sweet Dessert Display',
+        description: 'Pastel dessert table with themed cookies, cupcakes, and cake',
+        emoji: '\u{1F370}\u{1F9C1}',
+        imagePrompt: 'Adorable baby shower dessert table with pastel themed cake, cupcakes, cookies shaped like baby items, candy jars, and cute decorations, professional event photography',
+        products: [
+          { name: 'Baby Shower Cake Topper', emoji: '\u{1F382}', price: 8.99, category: 'decorations' },
+          { name: 'Cupcake Stand 3-Tier', emoji: '\u{1F9C1}', price: 16.99, category: 'tableware' },
+          { name: 'Cookie Cutter Set - Baby Shapes', emoji: '\u{1F36A}', price: 9.99, category: 'baking' },
+          { name: 'Dessert Labels & Picks 30pc', emoji: '\u{1F4DD}', price: 6.99, category: 'stationery' },
+          { name: 'Candy Jars Set of 4', emoji: '\u{1F36C}', price: 12.99, category: 'tableware' },
+        ],
+      },
+      {
+        id: 'bs-table-setting',
+        name: 'Themed Table Setting',
+        description: 'Coordinated pastel table decor with cute baby-themed plates and centerpieces',
+        emoji: '\u{1F476}\u{1F37D}',
+        imagePrompt: 'Beautiful baby shower table setting with pastel themed plates, cups, napkins, cute centerpieces with baby blocks and stuffed animals, professional event photography',
+        products: [
+          { name: 'Baby Shower Plates Set of 24', emoji: '\u{1F37D}', price: 11.99, category: 'tableware' },
+          { name: 'Baby Shower Cups Set of 24', emoji: '\u{1F964}', price: 9.99, category: 'tableware' },
+          { name: 'Pastel Napkins Set of 50', emoji: '\u{1F9FB}', price: 8.99, category: 'tableware' },
+          { name: 'Centerpiece Baby Blocks Set', emoji: '\u{1F9F1}', price: 14.99, category: 'decorations' },
+          { name: 'Tablecloth Pastel 3-pack', emoji: '\u{1F3A8}', price: 12.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'bs-balloon-garland',
+        name: 'Balloon Garland & Banner',
+        description: 'Soft pastel balloon garland with a "Welcome Baby" banner',
+        emoji: '\u{1F388}\u{1F476}',
+        imagePrompt: 'Pastel balloon garland decoration for baby shower with welcome baby banner, soft pink blue and white balloons, stuffed animals, professional event photography',
+        products: [
+          { name: 'Pastel Balloon Garland Kit', emoji: '\u{1F388}', price: 22.99, category: 'decorations' },
+          { name: 'Welcome Baby Banner', emoji: '\u{1F476}', price: 9.99, category: 'decorations' },
+          { name: 'Balloon Pump', emoji: '\u{1F4A8}', price: 8.99, category: 'decorations' },
+          { name: 'Confetti Balloons 12-pack', emoji: '\u{1F38A}', price: 7.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'bs-games-activities',
+        name: 'Games & Activity Station',
+        description: 'Fun baby shower games, advice cards, and activities for guests',
+        emoji: '\u{1F3B2}\u{1F4DD}',
+        imagePrompt: 'Baby shower game station with activity cards, prediction cards, diaper raffle tickets, and prizes displayed on a decorated table, professional event photography',
+        products: [
+          { name: 'Baby Shower Games Pack (5 games)', emoji: '\u{1F3B2}', price: 14.99, category: 'entertainment' },
+          { name: 'Advice & Wishes Cards 50pc', emoji: '\u{1F4DD}', price: 9.99, category: 'stationery' },
+          { name: 'Diaper Raffle Tickets 50pc', emoji: '\u{1F3AB}', price: 6.99, category: 'entertainment' },
+          { name: 'Prize Gift Set', emoji: '\u{1F381}', price: 18.99, category: 'favors' },
+        ],
+      },
+      {
+        id: 'bs-diaper-cake',
+        name: 'Diaper Cake & Gifts Display',
+        description: 'A stunning diaper cake centerpiece surrounded by wrapped baby gifts',
+        emoji: '\u{1F381}\u{1F476}',
+        imagePrompt: 'Beautiful diaper cake centerpiece for baby shower with ribbons and baby items, surrounded by wrapped gifts, soft pastel styling, professional event photography',
+        products: [
+          { name: 'Diaper Cake Kit', emoji: '\u{1F476}', price: 24.99, category: 'decorations' },
+          { name: 'Baby Gift Wrapping Set', emoji: '\u{1F381}', price: 11.99, category: 'favors' },
+          { name: 'Mommy-to-Be Sash & Tiara', emoji: '\u{1F451}', price: 9.99, category: 'accessories' },
+          { name: 'Photo Props Kit', emoji: '\u{1F4F8}', price: 11.49, category: 'entertainment' },
+        ],
+      },
+    ],
+    graduation: [
+      {
+        id: 'grad-balloon-display',
+        name: 'Congrats Balloon Display',
+        description: 'Cap-shaped balloons, number balloons, and school-color decorations',
+        emoji: '\u{1F393}\u{1F388}',
+        imagePrompt: 'Graduation party balloon display with grad cap balloons, number balloons showing graduation year, school color decorations, professional event photography',
+        products: [
+          { name: 'Grad Cap Foil Balloons 6-pack', emoji: '\u{1F393}', price: 12.99, category: 'decorations' },
+          { name: 'Number Balloons Set', emoji: '\u{1F388}', price: 9.99, category: 'decorations' },
+          { name: 'Graduation Banner', emoji: '\u{1F389}', price: 10.99, category: 'decorations' },
+          { name: 'School Color Balloons 50-pack', emoji: '\u{1F388}', price: 8.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'grad-photo-timeline',
+        name: 'Photo Memory Timeline',
+        description: 'A timeline display showing photos from kindergarten through graduation',
+        emoji: '\u{1F4F8}\u{1F5BC}',
+        imagePrompt: 'Graduation photo memory timeline display showing photos from childhood through graduation hanging on string with clothespins, decorated with school colors',
+        products: [
+          { name: 'Photo Banner Garland with Clips', emoji: '\u{1F4F8}', price: 13.99, category: 'decorations' },
+          { name: 'Photo Display Board', emoji: '\u{1F5BC}', price: 15.99, category: 'decorations' },
+          { name: 'Mini Clothespins 100-pack', emoji: '\u{1F4DD}', price: 5.99, category: 'decorations' },
+          { name: 'Guest Signing Board', emoji: '\u{1F4DD}', price: 17.99, category: 'stationery' },
+        ],
+      },
+      {
+        id: 'grad-table-setup',
+        name: 'Graduation Table Setup',
+        description: 'Themed table with plates, cups, and graduation-themed centerpieces',
+        emoji: '\u{1F37D}\u{1F393}',
+        imagePrompt: 'Graduation party table setting with themed plates cups and napkins, diploma-shaped centerpieces, confetti, school colors, professional event photography',
+        products: [
+          { name: 'Graduation Plates Set of 24', emoji: '\u{1F37D}', price: 12.99, category: 'tableware' },
+          { name: 'Graduation Cups Set of 24', emoji: '\u{1F964}', price: 9.99, category: 'tableware' },
+          { name: 'Graduation Napkins Set of 50', emoji: '\u{1F9FB}', price: 8.99, category: 'tableware' },
+          { name: 'Table Centerpiece Set', emoji: '\u{1F490}', price: 16.99, category: 'decorations' },
+          { name: 'Confetti Scatter Pack', emoji: '\u{1F38A}', price: 6.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'grad-favors',
+        name: 'Grad Party Favors',
+        description: 'Favor boxes shaped like grad caps with treats and thank-you tags',
+        emoji: '\u{1F381}\u{1F393}',
+        imagePrompt: 'Graduation party favor station with cap-shaped favor boxes, treats, thank you tags, and small gifts on decorated table, professional event photography',
+        products: [
+          { name: 'Grad Cap Favor Boxes 24-pack', emoji: '\u{1F381}', price: 14.99, category: 'favors' },
+          { name: 'Thank You Tags 50pc', emoji: '\u{1F4DD}', price: 6.99, category: 'stationery' },
+          { name: 'Star String Lights 15ft', emoji: '\u{2B50}', price: 12.99, category: 'decorations' },
+          { name: 'Congratulations Cake Topper', emoji: '\u{1F382}', price: 8.99, category: 'decorations' },
+        ],
+      },
+    ],
+    retirement: [
+      {
+        id: 'ret-gold-decor',
+        name: 'Gold & Elegant Decor',
+        description: 'Gold balloons, banner, and sophisticated table decor for a classy celebration',
+        emoji: '\u{1F388}\u{1F3C6}',
+        imagePrompt: 'Elegant retirement party with gold and black balloons, Happy Retirement banner, sophisticated table decorations, candles, professional event photography',
+        products: [
+          { name: 'Gold Balloon Set 30-pack', emoji: '\u{1F388}', price: 11.99, category: 'decorations' },
+          { name: 'Happy Retirement Banner', emoji: '\u{1F3C6}', price: 10.99, category: 'decorations' },
+          { name: 'Gold Tablecloth 3-pack', emoji: '\u{1F3A8}', price: 12.99, category: 'decorations' },
+          { name: 'Candle Centerpiece Set', emoji: '\u{1F56F}', price: 18.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'ret-memory-display',
+        name: 'Career Memory Wall',
+        description: 'Photo display celebrating career milestones and memories',
+        emoji: '\u{1F5BC}\u{1F4D6}',
+        imagePrompt: 'Retirement party memory wall with career photos, milestone timeline, guest book, and heartfelt messages on a decorated display, professional event photography',
+        products: [
+          { name: 'Memory Book & Guestbook', emoji: '\u{1F4D6}', price: 18.99, category: 'stationery' },
+          { name: 'Photo Display Board', emoji: '\u{1F5BC}', price: 15.99, category: 'decorations' },
+          { name: 'Retirement Wishes Cards 50pc', emoji: '\u{1F4DD}', price: 9.99, category: 'stationery' },
+          { name: 'Gold Photo Clips 30-pack', emoji: '\u{1F4F8}', price: 7.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'ret-table-setting',
+        name: 'Retirement Table Setting',
+        description: 'Sophisticated table with gold-rimmed plates and elegant napkins',
+        emoji: '\u{1F37D}\u{2728}',
+        imagePrompt: 'Sophisticated retirement party table with gold rimmed plates, elegant napkins, champagne glasses, and classy centerpiece, professional event photography',
+        products: [
+          { name: 'Gold-Rimmed Plates Set of 24', emoji: '\u{1F37D}', price: 16.99, category: 'tableware' },
+          { name: 'Champagne Cups Set of 24', emoji: '\u{1F964}', price: 11.99, category: 'tableware' },
+          { name: 'Elegant Napkins Set of 50', emoji: '\u{1F9FB}', price: 9.99, category: 'tableware' },
+          { name: 'Table Centerpiece', emoji: '\u{1F490}', price: 17.99, category: 'decorations' },
+          { name: 'Retirement Cake Topper', emoji: '\u{1F382}', price: 8.99, category: 'decorations' },
+        ],
+      },
+    ],
+    holiday: [
+      {
+        id: 'hol-table-setting',
+        name: 'Festive Table Setting',
+        description: 'Holiday-themed table with seasonal plates, garland runner, and candles',
+        emoji: '\u{1F384}\u{1F56F}',
+        imagePrompt: 'Festive holiday party table setting with seasonal plates, garland table runner, candles, ornaments, and warm lighting, professional event photography',
+        products: [
+          { name: 'Holiday Plates Set of 24', emoji: '\u{1F37D}', price: 12.99, category: 'tableware' },
+          { name: 'Holiday Cups Set of 24', emoji: '\u{1F964}', price: 9.99, category: 'tableware' },
+          { name: 'Festive Napkins Set of 50', emoji: '\u{1F9FB}', price: 8.99, category: 'tableware' },
+          { name: 'Garland Table Runner 6ft', emoji: '\u{1F33F}', price: 16.99, category: 'decorations' },
+          { name: 'Pillar Candles Set of 6', emoji: '\u{1F56F}', price: 14.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'hol-entrance-decor',
+        name: 'Holiday Entrance & Wreath',
+        description: 'A welcoming entrance with wreath, lights, and festive garland',
+        emoji: '\u{1F33F}\u{1F4A1}',
+        imagePrompt: 'Festive holiday party entrance with wreath on door, twinkling lights, garland, and seasonal decorations, warm and welcoming, professional event photography',
+        products: [
+          { name: 'Wreath 20 inch', emoji: '\u{1F33F}', price: 24.99, category: 'decorations' },
+          { name: 'Holiday Lights 30ft', emoji: '\u{1F4A1}', price: 18.99, category: 'decorations' },
+          { name: 'Holiday Garland 9ft', emoji: '\u{1F384}', price: 16.99, category: 'decorations' },
+          { name: 'Ornament Decor Set of 12', emoji: '\u{1F3AA}', price: 14.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'hol-cookie-station',
+        name: 'Cookie Decorating Station',
+        description: 'An interactive cookie decorating station with icing, sprinkles, and shapes',
+        emoji: '\u{1F36A}\u{1F3A8}',
+        imagePrompt: 'Fun holiday cookie decorating station with various cookie shapes, icing bottles, sprinkles, and decorated cookies on display, professional event photography',
+        products: [
+          { name: 'Cookie Cutter Set - Holiday', emoji: '\u{1F36A}', price: 9.99, category: 'baking' },
+          { name: 'Icing Decorating Kit', emoji: '\u{1F3A8}', price: 12.99, category: 'baking' },
+          { name: 'Sprinkles Assortment 6-pack', emoji: '\u{2728}', price: 8.99, category: 'baking' },
+          { name: 'Cookie Display Stand', emoji: '\u{1F37D}', price: 14.99, category: 'tableware' },
+          { name: 'Holiday Favor Tins 12-pack', emoji: '\u{1F381}', price: 11.99, category: 'favors' },
+        ],
+      },
+    ],
+    dinner: [
+      {
+        id: 'din-elegant-table',
+        name: 'Elegant Place Settings',
+        description: 'Sophisticated place settings with charger plates, wine glasses, and linen napkins',
+        emoji: '\u{1F377}\u{1F37D}',
+        imagePrompt: 'Elegant dinner party table with charger plates, crystal wine glasses, linen napkins with rings, calligraphy place cards, and candles, professional event photography',
+        products: [
+          { name: 'Charger Plates Set of 12', emoji: '\u{1F37D}', price: 34.99, category: 'tableware' },
+          { name: 'Wine Glasses Set of 12', emoji: '\u{1F377}', price: 28.99, category: 'tableware' },
+          { name: 'Linen Napkins Set of 12', emoji: '\u{1F9FB}', price: 19.99, category: 'tableware' },
+          { name: 'Napkin Rings Set of 12', emoji: '\u{1F380}', price: 12.99, category: 'tableware' },
+          { name: 'Place Card Holders Set of 12', emoji: '\u{1F4DD}', price: 11.99, category: 'stationery' },
+        ],
+      },
+      {
+        id: 'din-centerpiece',
+        name: 'Floral Centerpieces & Candles',
+        description: 'Low floral arrangements with pillar candles creating warm ambiance',
+        emoji: '\u{1F490}\u{1F56F}',
+        imagePrompt: 'Beautiful dinner party centerpiece with low floral arrangement, pillar candles, greenery, and elegant vases on table runner, warm lighting, professional event photography',
+        products: [
+          { name: 'Centerpiece Vase Set of 3', emoji: '\u{1F490}', price: 22.99, category: 'decorations' },
+          { name: 'Pillar Candles Set of 6', emoji: '\u{1F56F}', price: 16.99, category: 'decorations' },
+          { name: 'Table Runner 90 inch', emoji: '\u{1F3A8}', price: 14.99, category: 'decorations' },
+          { name: 'Fairy Lights 20ft', emoji: '\u{2728}', price: 12.99, category: 'decorations' },
+          { name: 'Eucalyptus Garland 6ft', emoji: '\u{1F33F}', price: 14.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'din-bar-cart',
+        name: 'Bar & Cocktail Setup',
+        description: 'A styled bar area with cocktail tools, garnishes, and menu cards',
+        emoji: '\u{1F378}\u{1F3A8}',
+        imagePrompt: 'Stylish dinner party bar cart with cocktail tools, garnishes, drink menu cards, elegant glasses and bottles, professional event photography',
+        products: [
+          { name: 'Cocktail Stirrers 50pc', emoji: '\u{1F378}', price: 8.99, category: 'accessories' },
+          { name: 'Menu Card Templates 25pc', emoji: '\u{1F4C4}', price: 10.99, category: 'stationery' },
+          { name: 'Cocktail Napkins Set of 100', emoji: '\u{1F9FB}', price: 9.99, category: 'tableware' },
+          { name: 'Ice Bucket & Tongs', emoji: '\u{1F9CA}', price: 16.99, category: 'accessories' },
+        ],
+      },
+    ],
+    anniversary: [
+      {
+        id: 'ann-romantic-table',
+        name: 'Romantic Table Setting',
+        description: 'Rose petals, candles, champagne flutes, and elegant place settings',
+        emoji: '\u{1F339}\u{1F56F}',
+        imagePrompt: 'Romantic anniversary dinner table with rose petals, candles, champagne flutes, elegant plates, and soft lighting, professional event photography',
+        products: [
+          { name: 'Rose Petals 1000 pcs', emoji: '\u{1F339}', price: 11.99, category: 'decorations' },
+          { name: 'Candle Holders Set of 6', emoji: '\u{1F56F}', price: 18.99, category: 'decorations' },
+          { name: 'Champagne Flutes Set of 12', emoji: '\u{1F942}', price: 22.99, category: 'tableware' },
+          { name: 'Anniversary Plates Set of 24', emoji: '\u{1F37D}', price: 14.99, category: 'tableware' },
+          { name: 'Anniversary Napkins Set of 50', emoji: '\u{1F9FB}', price: 9.99, category: 'tableware' },
+        ],
+      },
+      {
+        id: 'ann-photo-display',
+        name: 'Photo Memory Display',
+        description: 'A timeline of photos through the years with a guest signing canvas',
+        emoji: '\u{1F5BC}\u{1F495}',
+        imagePrompt: 'Anniversary photo timeline display with couple photos through the years, fairy lights, heart decorations, and guest signing canvas, professional event photography',
+        products: [
+          { name: 'Photo Display Banner with Clips', emoji: '\u{1F5BC}', price: 14.99, category: 'decorations' },
+          { name: 'Guest Signing Canvas', emoji: '\u{1F4DD}', price: 19.99, category: 'stationery' },
+          { name: 'Fairy Lights 30ft', emoji: '\u{2728}', price: 15.99, category: 'decorations' },
+          { name: 'Heart Confetti Pack', emoji: '\u{1F495}', price: 6.99, category: 'decorations' },
+        ],
+      },
+      {
+        id: 'ann-balloon-decor',
+        name: 'Balloon & Banner Display',
+        description: 'Heart balloons, anniversary banner, and party decorations',
+        emoji: '\u{1F388}\u{1F495}',
+        imagePrompt: 'Anniversary party decorations with heart shaped balloons, happy anniversary banner, gold accents, and elegant balloon arrangement, professional event photography',
+        products: [
+          { name: 'Heart Balloons Pack of 24', emoji: '\u{1F388}', price: 10.99, category: 'decorations' },
+          { name: 'Anniversary Banner', emoji: '\u{1F495}', price: 10.99, category: 'decorations' },
+          { name: 'Party Favor Boxes Pack of 24', emoji: '\u{1F381}', price: 11.99, category: 'favors' },
+          { name: 'Cake Topper "Anniversary"', emoji: '\u{1F382}', price: 9.99, category: 'decorations' },
+        ],
+      },
+    ],
   };
-
-  // Generate or retrieve a cached image for a mood board item
-  async function getItemImage(item, partyType, theme) {
-    const cacheKey = 'img_' + item.id;
-
-    // Check IndexedDB cache first
-    const cached = await getImage(cacheKey).catch(() => null);
-    if (cached) return cached;
-
-    // No API key = no generation
-    const apiKey = getApiKey();
-    if (!apiKey) return null;
-
-    // Build prompt from curated templates or item name
-    const categoryPrompts = curatedImagePrompts[partyType] || {};
-    let prompt;
-    if (categoryPrompts[item.category]) {
-      const themeDesc = theme ? `, ${theme} style` : '';
-      prompt = categoryPrompts[item.category] + themeDesc + '. Professional product photo, no text.';
-    } else {
-      prompt = buildImagePrompt(item.name, partyType, theme);
-    }
-
-    const imageData = await generateImageWithDallE(prompt);
-    if (imageData) {
-      await saveImage(cacheKey, imageData).catch(() => {});
-      return imageData;
-    }
-    return null;
-  }
 
   // ══════════════════════════════════════
   //  DIY AI PLANNER
@@ -377,8 +750,8 @@
     anniversary: '\u{1F495}',
   };
 
-  // Planner state machine stages:
-  // 'ask-theme' → 'ask-guests' → 'ask-budget' → 'ask-diy' → 'generate' → 'complete'
+  // State machine:
+  // ask-theme → ask-guests → ask-budget → ask-diy → show-inspiration → generate → complete
 
   function initPlannerState(partyType, userPrompt) {
     return {
@@ -387,6 +760,7 @@
       guestCount: null,
       budget: null,
       isDIY: null,
+      selectedScenes: [],
       stage: partyType && userPrompt ? 'ask-guests' : 'ask-theme',
     };
   }
@@ -414,7 +788,6 @@
     }
   });
 
-  // Quick pick buttons
   document.querySelectorAll('.quick-pick-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const type = btn.dataset.type;
@@ -432,7 +805,7 @@
     if (lower.includes('holiday') || lower.includes('christmas') || lower.includes('halloween')) return 'holiday';
     if (lower.includes('dinner')) return 'dinner';
     if (lower.includes('anniversary')) return 'anniversary';
-    return 'birthday'; // default
+    return 'birthday';
   }
 
   function startPlanner(partyType, userPrompt) {
@@ -453,7 +826,6 @@
       addChatMessage('user', userPrompt);
     }
 
-    // Start the conversation flow
     advancePlanner();
   }
 
@@ -466,7 +838,7 @@
         const label = partyTypeLabels[state.partyType] || 'party';
         showTypingThen(() => {
           addAssistantMessage(
-            `Great choice! Let's plan an amazing ${label}! \n\nWhat theme or style do you have in mind? For example, you could describe a color scheme, a character theme, or a vibe like "rustic" or "elegant".`,
+            `Great choice! Let's plan an amazing ${label}! \n\nWhat theme or style do you have in mind? For example, a color scheme, character theme, or a vibe like "rustic" or "elegant".`,
             [
               { text: 'Elegant & Classic', value: 'elegant and classic theme' },
               { text: 'Rustic & Natural', value: 'rustic and natural theme' },
@@ -481,7 +853,7 @@
         showTypingThen(() => {
           const themeDesc = state.theme ? `Love the "${escapeHtml(state.theme)}" theme! ` : '';
           addAssistantMessage(
-            `${themeDesc}Now, how many people are you expecting at the event? This will help me suggest the right quantities for supplies.`,
+            `${themeDesc}How many people are you expecting?`,
             [
               { text: '10-20 people', value: '15' },
               { text: '20-50 people', value: '35' },
@@ -495,7 +867,7 @@
       case 'ask-budget': {
         showTypingThen(() => {
           addAssistantMessage(
-            `Got it, planning for about ${state.guestCount} guests! What's your approximate budget for the event?`,
+            `Planning for ${state.guestCount} guests! What's your approximate budget?`,
             [
               { text: 'Under $200', value: '150' },
               { text: '$200 - $500', value: '350' },
@@ -510,62 +882,273 @@
       case 'ask-diy': {
         showTypingThen(() => {
           addAssistantMessage(
-            `Budget of ${formatCurrency(state.budget)} \u2014 I'll make sure to find options that fit! One last question: Are you doing this DIY style, or do you have an event coordinator helping out?`,
+            `Budget of ${formatCurrency(state.budget)} \u2014 got it! Last question: Are you doing this DIY or with a coordinator?`,
             [
-              { text: 'DIY \u2014 I\'m doing it myself!', value: 'DIY' },
+              { text: 'DIY \u2014 Doing it myself!', value: 'DIY' },
               { text: 'I have a coordinator', value: 'coordinator' },
             ]
           );
         });
         break;
       }
+      case 'show-inspiration': {
+        showTypingThen(() => {
+          const scenes = inspirationScenes[state.partyType] || inspirationScenes.birthday;
+          const themeLabel = state.theme ? ` with your "${escapeHtml(state.theme)}" vibe` : '';
+          addAssistantMessage(
+            `Here's some inspiration for your ${partyTypeLabels[state.partyType] || 'party'}${themeLabel}! \n\nTap the scenes you love \u2014 I'll use your picks to recommend exactly what to buy.`
+          );
+          addInspirationGrid(scenes);
+        }, 1200);
+        break;
+      }
       case 'generate': {
         showTypingThen(() => {
-          const items = generateMoodBoardItems(state);
+          const items = generateProductsFromScenes(state);
           data.moodBoardItems = items;
           saveData(data);
 
-          const hasApiKey = !!getApiKey();
-          let summary = buildSummaryMessage(state);
-          if (hasApiKey) {
-            summary += '\n\nGenerating mood board images for your theme...';
-          }
+          const sceneCount = state.selectedScenes.length;
+          addAssistantMessage(
+            `Based on the ${sceneCount} look${sceneCount > 1 ? 's' : ''} you picked, here's what I recommend to bring it to life!\n\nThese items match the scenes you loved, scaled for ${state.guestCount} guests within your ${formatCurrency(state.budget)} budget. Click "Add to Bucket" on the ones you want!`
+          );
 
-          addAssistantMessageWithMoodBoard(summary, items);
+          addAssistantMessageWithMoodBoard('', items);
 
           state.stage = 'complete';
           saveData(data);
 
-          // If API key available, generate images in background
-          if (hasApiKey) {
+          // Generate AI images if API key present
+          if (getApiKey()) {
             generateImagesForItems(items, state.partyType, state.theme);
           }
         }, 1500);
         break;
       }
       case 'complete': {
-        // Already complete, user can keep chatting for more suggestions
         break;
       }
     }
   }
 
-  function buildSummaryMessage(state) {
-    const label = partyTypeLabels[state.partyType] || 'Party';
-    const diyLabel = state.isDIY ? 'DIY' : 'with a coordinator';
-    return `Here's your curated ${label} mood board! I picked items that match your "${escapeHtml(state.theme || 'classic')}" theme for ${state.guestCount} guests within a ${formatCurrency(state.budget)} budget (${diyLabel}).\n\nClick "Add to Bucket" on any item you like \u2014 it'll be saved to your Party Bucket with direct shopping links. You can also check the Mood Board tab for a full-screen view!`;
+  // ══════════════════════════════════════
+  //  INSPIRATION SCENE GRID (Multi-Select)
+  // ══════════════════════════════════════
+
+  function addInspirationGrid(scenes) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'chat-message assistant';
+    wrapper.style.maxWidth = '100%';
+
+    const grid = document.createElement('div');
+    grid.className = 'inspiration-grid';
+
+    const selected = new Set();
+
+    scenes.forEach(scene => {
+      const card = document.createElement('div');
+      card.className = 'inspiration-card';
+      card.id = 'inspiration-' + scene.id;
+
+      const hasApiKey = !!getApiKey();
+      let visualContent;
+      if (hasApiKey) {
+        visualContent = '<div class="img-loading"><div class="spinner"></div><span>Loading...</span></div>';
+      } else {
+        visualContent = `<span class="inspiration-emoji">${scene.emoji}</span>`;
+      }
+
+      card.innerHTML = `
+        <div class="inspiration-visual">${visualContent}</div>
+        <div class="inspiration-check">\u2713</div>
+        <div class="inspiration-info">
+          <span class="inspiration-name">${escapeHtml(scene.name)}</span>
+          <span class="inspiration-desc">${escapeHtml(scene.description)}</span>
+        </div>
+      `;
+
+      card.addEventListener('click', () => {
+        if (selected.has(scene.id)) {
+          selected.delete(scene.id);
+          card.classList.remove('selected');
+        } else {
+          selected.add(scene.id);
+          card.classList.add('selected');
+        }
+        // Update continue button
+        updateContinueButton(selected.size);
+      });
+
+      grid.appendChild(card);
+
+      // Load AI image if available
+      if (hasApiKey) {
+        const cacheKey = 'scene_' + scene.id;
+        getImage(cacheKey).then(cached => {
+          if (cached) {
+            updateSceneImage(scene.id, cached);
+          } else {
+            generateImageWithDallE(scene.imagePrompt).then(imgData => {
+              if (imgData) {
+                saveImage(cacheKey, imgData).catch(() => {});
+                updateSceneImage(scene.id, imgData);
+              }
+            });
+          }
+        }).catch(() => {});
+      }
+    });
+
+    wrapper.appendChild(grid);
+
+    // Continue button
+    const btnContainer = document.createElement('div');
+    btnContainer.className = 'inspiration-actions';
+    btnContainer.id = 'inspiration-continue-container';
+
+    const continueBtn = document.createElement('button');
+    continueBtn.className = 'btn btn-primary inspiration-continue-btn';
+    continueBtn.id = 'inspiration-continue-btn';
+    continueBtn.textContent = 'Select at least 1 scene to continue';
+    continueBtn.disabled = true;
+
+    continueBtn.addEventListener('click', () => {
+      if (selected.size === 0) return;
+
+      const state = data.plannerState;
+      state.selectedScenes = Array.from(selected);
+      state.stage = 'generate';
+      saveData(data);
+
+      // Show user's selection as a message
+      const sceneNames = state.selectedScenes
+        .map(sid => {
+          const allScenes = inspirationScenes[state.partyType] || [];
+          const s = allScenes.find(sc => sc.id === sid);
+          return s ? s.name : sid;
+        })
+        .join(', ');
+      addChatMessage('user', `I love these: ${sceneNames}`);
+
+      // Disable further selection
+      grid.querySelectorAll('.inspiration-card').forEach(c => {
+        c.style.pointerEvents = 'none';
+      });
+      continueBtn.disabled = true;
+      continueBtn.textContent = 'Generating recommendations...';
+
+      advancePlanner();
+    });
+
+    btnContainer.appendChild(continueBtn);
+    wrapper.appendChild(btnContainer);
+
+    chatMessages.appendChild(wrapper);
+    scrollChatToBottom();
+  }
+
+  function updateContinueButton(count) {
+    const btn = document.getElementById('inspiration-continue-btn');
+    if (!btn) return;
+    if (count > 0) {
+      btn.disabled = false;
+      btn.textContent = `Continue with ${count} scene${count > 1 ? 's' : ''} selected`;
+    } else {
+      btn.disabled = true;
+      btn.textContent = 'Select at least 1 scene to continue';
+    }
+  }
+
+  function updateSceneImage(sceneId, imageDataUrl) {
+    const card = document.getElementById('inspiration-' + sceneId);
+    if (!card) return;
+    const visual = card.querySelector('.inspiration-visual');
+    if (!visual) return;
+    visual.innerHTML = '<img src="' + imageDataUrl + '" alt="Inspiration" loading="lazy">';
+  }
+
+  // ══════════════════════════════════════
+  //  PRODUCT GENERATION FROM SCENES
+  // ══════════════════════════════════════
+
+  function generateProductsFromScenes(state) {
+    const scenes = inspirationScenes[state.partyType] || inspirationScenes.birthday;
+    const selectedIds = state.selectedScenes || [];
+    const guests = state.guestCount || 30;
+    const budget = state.budget || 500;
+    const theme = state.theme || '';
+
+    // Collect products from all selected scenes
+    const productMap = new Map(); // dedupe by name
+    selectedIds.forEach(sceneId => {
+      const scene = scenes.find(s => s.id === sceneId);
+      if (!scene) return;
+      scene.products.forEach(p => {
+        if (!productMap.has(p.name)) {
+          productMap.set(p.name, { ...p });
+        }
+      });
+    });
+
+    let products = Array.from(productMap.values());
+
+    // Apply theme adjective to product names
+    const themeAdj = extractThemeAdjective(theme);
+    if (themeAdj && themeAdj !== 'Classic') {
+      products = products.map(p => ({
+        ...p,
+        name: themeAdj + ' ' + p.name,
+      }));
+    }
+
+    // Scale quantities based on guest count
+    products = products.map(p => {
+      let name = p.name;
+      if (p.category === 'tableware' && !name.includes('Set of') && !name.includes('Pack of')) {
+        const qty = guests > 50 ? 'Set of 100' : guests > 20 ? 'Set of 50' : 'Set of 24';
+        name = name + ' ' + qty;
+      }
+      return { ...p, name };
+    });
+
+    // Scale prices to fit budget
+    const totalRaw = products.reduce((s, p) => s + p.price, 0);
+    const scale = totalRaw > 0 ? (budget * 0.7) / totalRaw : 1;
+
+    return products.map(p => ({
+      id: generateId(),
+      name: p.name,
+      emoji: p.emoji,
+      price: Math.max(2.99, Math.round(p.price * scale * 100) / 100),
+      store: storeNames[Math.floor(Math.random() * storeNames.length)],
+      category: p.category,
+    }));
+  }
+
+  function extractThemeAdjective(theme) {
+    if (!theme) return 'Classic';
+    const cleaned = theme.replace(/theme|themed|style|styled|a |the |an /gi, '').trim();
+    if (cleaned.length > 40) return cleaned.substring(0, 40);
+    if (cleaned.length === 0) return 'Classic';
+    return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   }
 
   // ── Background Image Generation ──
 
   async function generateImagesForItems(items, partyType, theme) {
-    // Generate images one at a time to avoid rate limits
     for (const item of items) {
-      const imageData = await getItemImage(item, partyType, theme);
+      const cacheKey = 'img_' + item.id;
+      const cached = await getImage(cacheKey).catch(() => null);
+      if (cached) {
+        updateCardImage('mood-item-' + item.id, cached);
+        updateCardImage('moodboard-card-' + item.id, cached);
+        continue;
+      }
+      const prompt = buildImagePrompt(item.name, partyType, theme);
+      const imageData = await generateImageWithDallE(prompt);
       if (imageData) {
-        // Update the card in the chat if it exists
+        await saveImage(cacheKey, imageData).catch(() => {});
         updateCardImage('mood-item-' + item.id, imageData);
-        // Also update mood board tab card if visible
         updateCardImage('moodboard-card-' + item.id, imageData);
       }
     }
@@ -576,7 +1159,6 @@
     if (!card) return;
     const visual = card.querySelector('.mood-item-visual, .moodboard-card-visual');
     if (!visual) return;
-    // Replace emoji/loading with the image
     visual.innerHTML = '<img src="' + imageDataUrl + '" alt="Mood board image" loading="lazy">';
   }
 
@@ -629,29 +1211,31 @@
       case 'ask-diy': {
         const lower = text.toLowerCase();
         state.isDIY = lower.includes('diy') || lower.includes('myself') || lower.includes('own');
-        state.stage = 'generate';
+        state.stage = 'show-inspiration';
         saveData(data);
         advancePlanner();
         break;
       }
+      case 'show-inspiration': {
+        // User typed something while viewing inspiration - nudge them to select
+        showTypingThen(() => {
+          addAssistantMessage(
+            'Tap on the scene images above that you love, then click the "Continue" button! You can select as many as you like.',
+          );
+        });
+        break;
+      }
       case 'complete': {
-        // Allow follow-up: regenerate or answer questions
         showTypingThen(() => {
           if (text.toLowerCase().includes('more') || text.toLowerCase().includes('different') || text.toLowerCase().includes('regenerate')) {
-            const items = generateMoodBoardItems(state);
-            data.moodBoardItems = [...data.moodBoardItems, ...items];
+            // Show inspiration again for re-selection
+            state.stage = 'show-inspiration';
+            state.selectedScenes = [];
             saveData(data);
-            addAssistantMessageWithMoodBoard(
-              'Here are some more options for your party! Pick the ones you like:',
-              items
-            );
-            // Generate images for new items too
-            if (getApiKey()) {
-              generateImagesForItems(items, state.partyType, state.theme);
-            }
+            advancePlanner();
           } else {
             addAssistantMessage(
-              'Your mood board is ready above! You can say "show me more options" to see additional items, or browse your Party Bucket to review what you\'ve picked. You can also explore the Mood Board and Budget Tracker tabs for more features.',
+              'Your mood board is ready! You can say "show me more options" to browse different inspiration, or check your Party Bucket for items you\'ve picked.',
               [
                 { text: 'Show me more options', value: 'show me more different options' },
                 { text: 'View Party Bucket', value: '__toggle_bucket__' },
@@ -713,7 +1297,9 @@
     const msg = document.createElement('div');
     msg.className = 'chat-message assistant';
     msg.style.maxWidth = '100%';
-    msg.innerHTML = text.replace(/\n/g, '<br>');
+    if (text) {
+      msg.innerHTML = text.replace(/\n/g, '<br>');
+    }
 
     const grid = document.createElement('div');
     grid.className = 'chat-mood-grid';
@@ -735,7 +1321,6 @@
     const storeUrl = getStoreUrl(item.name, item.store);
     const hasApiKey = !!getApiKey();
 
-    // Show loading state if API key available, otherwise emoji
     let visualContent;
     if (hasApiKey) {
       visualContent = '<div class="img-loading"><div class="spinner"></div><span>Generating...</span></div>';
@@ -762,7 +1347,6 @@
       toggleBucketItem(item);
     });
 
-    // Check IndexedDB for cached image
     const cacheKey = 'img_' + item.id;
     getImage(cacheKey).then(cached => {
       if (cached) {
@@ -811,7 +1395,6 @@
       document.getElementById('planner-party-title').textContent = label + ' Planner';
       chatMessages.innerHTML = '';
 
-      // Replay chat history
       data.chatHistory.forEach(msg => {
         const el = document.createElement('div');
         el.className = `chat-message ${msg.role}`;
@@ -819,7 +1402,13 @@
         chatMessages.appendChild(el);
       });
 
-      // If mood board items exist and we're complete, re-render them
+      // If in inspiration stage, re-render the grid
+      if (data.plannerState.stage === 'show-inspiration') {
+        const scenes = inspirationScenes[data.plannerState.partyType] || inspirationScenes.birthday;
+        addInspirationGrid(scenes);
+      }
+
+      // If complete and mood board items exist, re-render
       if (data.plannerState.stage === 'complete' && data.moodBoardItems.length > 0) {
         const grid = document.createElement('div');
         grid.className = 'chat-mood-grid';
@@ -835,7 +1424,7 @@
   }
 
   // ══════════════════════════════════════
-  //  PRODUCT / MOOD BOARD GENERATION
+  //  STORE URLS & HELPERS
   // ══════════════════════════════════════
 
   const storeNames = ['Amazon', 'Walmart', 'Target'];
@@ -848,173 +1437,6 @@
       case 'Target': return 'https://www.target.com/s?searchTerm=' + q;
       default: return 'https://www.amazon.com/s?k=' + q;
     }
-  }
-
-  function randomStore() {
-    return storeNames[Math.floor(Math.random() * storeNames.length)];
-  }
-
-  function generateMoodBoardItems(state) {
-    const type = state.partyType;
-    const theme = (state.theme || '').toLowerCase();
-    const guests = state.guestCount || 30;
-    const budget = state.budget || 500;
-
-    const catalog = getProductCatalog(type, theme, guests);
-
-    // Select a subset based on budget - pick 8-12 items
-    const count = Math.min(catalog.length, Math.floor(Math.random() * 5) + 8);
-    const shuffled = catalog.sort(() => Math.random() - 0.5);
-    const selected = shuffled.slice(0, count);
-
-    // Scale prices based on budget
-    const totalRaw = selected.reduce((s, item) => s + item.price, 0);
-    const scale = totalRaw > 0 ? (budget * 0.7) / totalRaw : 1;
-
-    return selected.map(item => ({
-      id: generateId(),
-      name: item.name,
-      emoji: item.emoji,
-      price: Math.max(2.99, Math.round(item.price * scale * 100) / 100),
-      store: randomStore(),
-      category: item.category,
-    }));
-  }
-
-  function getProductCatalog(type, theme, guests) {
-    const themeAdj = extractThemeAdjective(theme);
-    const sizeLabel = guests > 50 ? 'Set of 100' : guests > 20 ? 'Set of 50' : 'Set of 25';
-    const smallSet = guests > 50 ? 'Pack of 24' : 'Pack of 12';
-
-    const baseCatalog = {
-      birthday: [
-        { name: `${themeAdj} Birthday Banner`, emoji: '\u{1F389}', price: 12.99, category: 'decorations' },
-        { name: `${themeAdj} Party Balloons ${smallSet}`, emoji: '\u{1F388}', price: 8.99, category: 'decorations' },
-        { name: `${themeAdj} Paper Plates ${sizeLabel}`, emoji: '\u{1F37D}', price: 14.99, category: 'tableware' },
-        { name: `${themeAdj} Paper Cups ${sizeLabel}`, emoji: '\u{1F964}', price: 11.99, category: 'tableware' },
-        { name: `${themeAdj} Napkins ${sizeLabel}`, emoji: '\u{1F9FB}', price: 9.99, category: 'tableware' },
-        { name: `${themeAdj} Party Tablecloth Pack of 3`, emoji: '\u{1F3A8}', price: 15.99, category: 'decorations' },
-        { name: `${themeAdj} Cake Topper`, emoji: '\u{1F382}', price: 7.99, category: 'decorations' },
-        { name: `${themeAdj} Party Favor Bags ${smallSet}`, emoji: '\u{1F381}', price: 13.99, category: 'favors' },
-        { name: `${themeAdj} Centerpiece Decoration`, emoji: '\u{1F490}', price: 18.99, category: 'decorations' },
-        { name: `${themeAdj} Party Hats ${smallSet}`, emoji: '\u{1F451}', price: 9.99, category: 'accessories' },
-        { name: `${themeAdj} Confetti Scatter Pack`, emoji: '\u{1F38A}', price: 6.99, category: 'decorations' },
-        { name: `${themeAdj} Cupcake Liners ${sizeLabel}`, emoji: '\u{1F9C1}', price: 8.49, category: 'baking' },
-        { name: `${themeAdj} String Lights 20ft`, emoji: '\u{1F4A1}', price: 16.99, category: 'decorations' },
-        { name: `${themeAdj} Photo Booth Props Set`, emoji: '\u{1F4F8}', price: 12.49, category: 'entertainment' },
-        { name: `${themeAdj} Plastic Utensils ${sizeLabel}`, emoji: '\u{1F374}', price: 10.99, category: 'tableware' },
-      ],
-      wedding: [
-        { name: `${themeAdj} Wedding Arch Flowers`, emoji: '\u{1F490}', price: 45.99, category: 'decorations' },
-        { name: `${themeAdj} Table Runner Pack of 5`, emoji: '\u{1F3A8}', price: 28.99, category: 'decorations' },
-        { name: `${themeAdj} Wedding Place Cards ${sizeLabel}`, emoji: '\u{1F4DD}', price: 15.99, category: 'stationery' },
-        { name: `${themeAdj} Candle Holders Set of 12`, emoji: '\u{1F56F}', price: 34.99, category: 'decorations' },
-        { name: `${themeAdj} Champagne Flutes ${smallSet}`, emoji: '\u{1F942}', price: 24.99, category: 'tableware' },
-        { name: `${themeAdj} Wedding Favor Boxes ${sizeLabel}`, emoji: '\u{1F381}', price: 19.99, category: 'favors' },
-        { name: `${themeAdj} Satin Ribbon 100 yards`, emoji: '\u{1F380}', price: 12.99, category: 'decorations' },
-        { name: `${themeAdj} Guest Book & Pen Set`, emoji: '\u{1F4D6}', price: 22.99, category: 'stationery' },
-        { name: `${themeAdj} Rose Petals 2000 pcs`, emoji: '\u{1F339}', price: 14.99, category: 'decorations' },
-        { name: `${themeAdj} Table Numbers Set of 25`, emoji: '\u{1F522}', price: 16.99, category: 'stationery' },
-        { name: `${themeAdj} Cake Cutting Set`, emoji: '\u{1F52A}', price: 18.99, category: 'accessories' },
-        { name: `${themeAdj} Fairy Lights 50ft`, emoji: '\u{2728}', price: 22.99, category: 'decorations' },
-        { name: `${themeAdj} Tulle Roll 100 yards`, emoji: '\u{1F3A8}', price: 11.99, category: 'decorations' },
-        { name: `${themeAdj} Wedding Bubbles ${sizeLabel}`, emoji: '\u{1FAE7}', price: 12.99, category: 'entertainment' },
-      ],
-      babyshower: [
-        { name: `${themeAdj} Baby Shower Banner`, emoji: '\u{1F476}', price: 11.99, category: 'decorations' },
-        { name: `${themeAdj} Baby Shower Balloons ${smallSet}`, emoji: '\u{1F388}', price: 9.99, category: 'decorations' },
-        { name: `${themeAdj} Paper Plates ${sizeLabel}`, emoji: '\u{1F37D}', price: 13.99, category: 'tableware' },
-        { name: `${themeAdj} Paper Cups ${sizeLabel}`, emoji: '\u{1F964}', price: 10.99, category: 'tableware' },
-        { name: `${themeAdj} Napkins ${sizeLabel}`, emoji: '\u{1F9FB}', price: 8.99, category: 'tableware' },
-        { name: `${themeAdj} Diaper Cake Kit`, emoji: '\u{1F381}', price: 24.99, category: 'decorations' },
-        { name: `${themeAdj} Baby Shower Games Pack`, emoji: '\u{1F3B2}', price: 14.99, category: 'entertainment' },
-        { name: `${themeAdj} Favor Bags ${smallSet}`, emoji: '\u{1F381}', price: 11.99, category: 'favors' },
-        { name: `${themeAdj} Centerpiece Baby Blocks`, emoji: '\u{1F9F1}', price: 16.99, category: 'decorations' },
-        { name: `${themeAdj} Mommy-to-Be Sash`, emoji: '\u{1F451}', price: 8.99, category: 'accessories' },
-        { name: `${themeAdj} Advice Card Set 50pc`, emoji: '\u{1F4DD}', price: 9.99, category: 'stationery' },
-        { name: `${themeAdj} Cupcake Toppers ${smallSet}`, emoji: '\u{1F9C1}', price: 7.99, category: 'baking' },
-        { name: `${themeAdj} Table Confetti Pack`, emoji: '\u{1F38A}', price: 6.49, category: 'decorations' },
-        { name: `${themeAdj} Photo Props Kit`, emoji: '\u{1F4F8}', price: 11.49, category: 'entertainment' },
-      ],
-      graduation: [
-        { name: `${themeAdj} Graduation Banner`, emoji: '\u{1F393}', price: 12.99, category: 'decorations' },
-        { name: `${themeAdj} Grad Cap Balloons ${smallSet}`, emoji: '\u{1F388}', price: 10.99, category: 'decorations' },
-        { name: `${themeAdj} Party Plates ${sizeLabel}`, emoji: '\u{1F37D}', price: 14.99, category: 'tableware' },
-        { name: `${themeAdj} Party Cups ${sizeLabel}`, emoji: '\u{1F964}', price: 11.99, category: 'tableware' },
-        { name: `${themeAdj} Napkins ${sizeLabel}`, emoji: '\u{1F9FB}', price: 9.99, category: 'tableware' },
-        { name: `${themeAdj} Congratulations Cake Topper`, emoji: '\u{1F382}', price: 8.99, category: 'decorations' },
-        { name: `${themeAdj} Photo Banner Garland`, emoji: '\u{1F4F8}', price: 13.99, category: 'decorations' },
-        { name: `${themeAdj} Grad Party Favor Boxes ${smallSet}`, emoji: '\u{1F381}', price: 12.99, category: 'favors' },
-        { name: `${themeAdj} Table Centerpiece Set`, emoji: '\u{1F490}', price: 19.99, category: 'decorations' },
-        { name: `${themeAdj} Confetti Scatter Pack`, emoji: '\u{1F38A}', price: 7.49, category: 'decorations' },
-        { name: `${themeAdj} Guest Signing Board`, emoji: '\u{1F4DD}', price: 17.99, category: 'stationery' },
-        { name: `${themeAdj} Star String Lights 15ft`, emoji: '\u{2B50}', price: 14.99, category: 'decorations' },
-      ],
-      retirement: [
-        { name: `${themeAdj} Retirement Banner`, emoji: '\u{1F3C6}', price: 12.99, category: 'decorations' },
-        { name: `${themeAdj} Gold Balloons ${smallSet}`, emoji: '\u{1F388}', price: 10.99, category: 'decorations' },
-        { name: `${themeAdj} Party Plates ${sizeLabel}`, emoji: '\u{1F37D}', price: 14.99, category: 'tableware' },
-        { name: `${themeAdj} Paper Cups ${sizeLabel}`, emoji: '\u{1F964}', price: 11.99, category: 'tableware' },
-        { name: `${themeAdj} Napkins ${sizeLabel}`, emoji: '\u{1F9FB}', price: 9.99, category: 'tableware' },
-        { name: `${themeAdj} Memory Book & Guestbook`, emoji: '\u{1F4D6}', price: 18.99, category: 'stationery' },
-        { name: `${themeAdj} Cake Topper "Happy Retirement"`, emoji: '\u{1F382}', price: 9.99, category: 'decorations' },
-        { name: `${themeAdj} Photo Display Board`, emoji: '\u{1F5BC}', price: 15.99, category: 'decorations' },
-        { name: `${themeAdj} Party Favor Bags ${smallSet}`, emoji: '\u{1F381}', price: 11.99, category: 'favors' },
-        { name: `${themeAdj} Table Centerpiece`, emoji: '\u{1F490}', price: 17.99, category: 'decorations' },
-        { name: `${themeAdj} Confetti & Streamer Kit`, emoji: '\u{1F38A}', price: 8.99, category: 'decorations' },
-      ],
-      holiday: [
-        { name: `${themeAdj} Holiday Garland 9ft`, emoji: '\u{1F384}', price: 16.99, category: 'decorations' },
-        { name: `${themeAdj} Holiday Lights 30ft`, emoji: '\u{1F4A1}', price: 18.99, category: 'decorations' },
-        { name: `${themeAdj} Party Plates ${sizeLabel}`, emoji: '\u{1F37D}', price: 14.99, category: 'tableware' },
-        { name: `${themeAdj} Party Cups ${sizeLabel}`, emoji: '\u{1F964}', price: 11.99, category: 'tableware' },
-        { name: `${themeAdj} Napkins ${sizeLabel}`, emoji: '\u{1F9FB}', price: 9.99, category: 'tableware' },
-        { name: `${themeAdj} Ornament Decor Set of 12`, emoji: '\u{1F3AA}', price: 22.99, category: 'decorations' },
-        { name: `${themeAdj} Candle Set of 6`, emoji: '\u{1F56F}', price: 14.99, category: 'decorations' },
-        { name: `${themeAdj} Table Runner Pack of 3`, emoji: '\u{1F3A8}', price: 15.99, category: 'decorations' },
-        { name: `${themeAdj} Party Favor Tins ${smallSet}`, emoji: '\u{1F381}', price: 13.99, category: 'favors' },
-        { name: `${themeAdj} Cookie Cutter Set`, emoji: '\u{1F36A}', price: 9.99, category: 'baking' },
-        { name: `${themeAdj} Wreath 20 inch`, emoji: '\u{1F33F}', price: 24.99, category: 'decorations' },
-      ],
-      dinner: [
-        { name: `${themeAdj} Linen Napkins ${smallSet}`, emoji: '\u{1F9FB}', price: 19.99, category: 'tableware' },
-        { name: `${themeAdj} Pillar Candles Set of 6`, emoji: '\u{1F56F}', price: 16.99, category: 'decorations' },
-        { name: `${themeAdj} Table Runner 90 inch`, emoji: '\u{1F3A8}', price: 14.99, category: 'decorations' },
-        { name: `${themeAdj} Place Card Holders ${smallSet}`, emoji: '\u{1F4DD}', price: 12.99, category: 'stationery' },
-        { name: `${themeAdj} Wine Glasses ${smallSet}`, emoji: '\u{1F377}', price: 28.99, category: 'tableware' },
-        { name: `${themeAdj} Centerpiece Vase Set of 3`, emoji: '\u{1F490}', price: 22.99, category: 'decorations' },
-        { name: `${themeAdj} Fairy Lights 20ft`, emoji: '\u{2728}', price: 12.99, category: 'decorations' },
-        { name: `${themeAdj} Charger Plates ${smallSet}`, emoji: '\u{1F37D}', price: 34.99, category: 'tableware' },
-        { name: `${themeAdj} Menu Card Templates 25pc`, emoji: '\u{1F4C4}', price: 10.99, category: 'stationery' },
-        { name: `${themeAdj} Cocktail Stirrers 50pc`, emoji: '\u{1F378}', price: 8.99, category: 'accessories' },
-      ],
-      anniversary: [
-        { name: `${themeAdj} Anniversary Banner`, emoji: '\u{1F495}', price: 12.99, category: 'decorations' },
-        { name: `${themeAdj} Heart Balloons ${smallSet}`, emoji: '\u{1F388}', price: 10.99, category: 'decorations' },
-        { name: `${themeAdj} Party Plates ${sizeLabel}`, emoji: '\u{1F37D}', price: 14.99, category: 'tableware' },
-        { name: `${themeAdj} Champagne Flutes ${smallSet}`, emoji: '\u{1F942}', price: 22.99, category: 'tableware' },
-        { name: `${themeAdj} Napkins ${sizeLabel}`, emoji: '\u{1F9FB}', price: 9.99, category: 'tableware' },
-        { name: `${themeAdj} Photo Display Banner`, emoji: '\u{1F5BC}', price: 14.99, category: 'decorations' },
-        { name: `${themeAdj} Cake Topper "Anniversary"`, emoji: '\u{1F382}', price: 9.99, category: 'decorations' },
-        { name: `${themeAdj} Rose Petals 1000 pcs`, emoji: '\u{1F339}', price: 11.99, category: 'decorations' },
-        { name: `${themeAdj} Candle Holders Set of 6`, emoji: '\u{1F56F}', price: 18.99, category: 'decorations' },
-        { name: `${themeAdj} Party Favor Boxes ${smallSet}`, emoji: '\u{1F381}', price: 11.99, category: 'favors' },
-        { name: `${themeAdj} Fairy Lights 30ft`, emoji: '\u{2728}', price: 15.99, category: 'decorations' },
-        { name: `${themeAdj} Guest Signing Canvas`, emoji: '\u{1F4DD}', price: 19.99, category: 'stationery' },
-      ],
-    };
-
-    return baseCatalog[type] || baseCatalog.birthday;
-  }
-
-  function extractThemeAdjective(theme) {
-    if (!theme) return 'Classic';
-    // Take the first meaningful words from the theme
-    const cleaned = theme.replace(/theme|themed|style|styled|a |the |an /gi, '').trim();
-    if (cleaned.length > 40) return cleaned.substring(0, 40);
-    if (cleaned.length === 0) return 'Classic';
-    // Capitalize first letter
-    return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   }
 
   // ══════════════════════════════════════
@@ -1073,7 +1495,6 @@
   }
 
   function refreshMoodItemCards() {
-    // Update all mood item cards in chat to reflect bucket state
     document.querySelectorAll('.mood-item').forEach(card => {
       const idAttr = card.id;
       if (!idAttr) return;
@@ -1090,12 +1511,8 @@
         btn.textContent = 'Add to Bucket';
       }
     });
-
-    // Also refresh mood board tab
     renderMoodBoard();
   }
-
-  // ── Bucket Panel Toggle ──
 
   function toggleBucketPanel() {
     const panel = document.getElementById('party-bucket-panel');
@@ -1230,8 +1647,6 @@
   };
 
   const addExpenseBtn = document.getElementById('add-expense-btn');
-
-  // Budget limit
   const budgetLimitInput = document.getElementById('budget-limit');
   budgetLimitInput.value = data.budgetLimit || 0;
 
@@ -1343,7 +1758,6 @@
 
     let html = '';
 
-    // Render uploaded images first
     uploads.forEach(img => {
       html += `
         <div class="moodboard-card uploaded" id="moodboard-upload-${img.id}">
@@ -1358,7 +1772,6 @@
       `;
     });
 
-    // Render AI-generated/planner items
     allItems.forEach(item => {
       const storeUrl = getStoreUrl(item.name, item.store);
       const inBucket = isInBucket(item.id);
@@ -1380,21 +1793,18 @@
 
     grid.innerHTML = html;
 
-    // Load uploaded images from IndexedDB
     uploads.forEach(img => {
       getImage('upload_' + img.id).then(dataUrl => {
         if (dataUrl) {
           const card = document.getElementById('moodboard-upload-' + img.id);
           if (card) {
             const visual = card.querySelector('.moodboard-card-visual');
-            // Keep delete button, replace loading with image
             visual.innerHTML = `<img src="${dataUrl}" alt="${escapeHtml(img.name)}" loading="lazy"><button class="moodboard-card-delete" onclick="app.deleteUploadedImage('${img.id}')">&times;</button>`;
           }
         }
       }).catch(() => {});
     });
 
-    // Load cached AI images for planner items
     allItems.forEach(item => {
       getImage('img_' + item.id).then(dataUrl => {
         if (dataUrl) {
@@ -1427,24 +1837,16 @@
 
     for (const file of files) {
       if (!file.type.startsWith('image/')) continue;
-
       const id = generateId();
-      const name = file.name.replace(/\.[^.]+$/, ''); // strip extension
-
-      // Compress and store
+      const name = file.name.replace(/\.[^.]+$/, '');
       const compressed = await compressImage(file, 800, 0.7);
       await saveImage('upload_' + id, compressed).catch(() => {});
-
-      // Save metadata
       if (!data.uploadedImages) data.uploadedImages = [];
       data.uploadedImages.push({ id, name, timestamp: Date.now() });
       saveData(data);
     }
 
-    // Reset input so same file can be re-selected
     uploadInput.value = '';
-
-    // Re-render mood board
     renderMoodBoard();
   });
 
@@ -1468,8 +1870,6 @@
     restorePlannerState();
   }
 
-  // ── Public API (for onclick handlers) ──
-
   window.app = {
     editGuest,
     deleteGuest,
@@ -1480,7 +1880,6 @@
     deleteUploadedImage,
   };
 
-  // ── Init ──
-  openDB().catch(() => console.warn('IndexedDB unavailable, image storage disabled'));
+  openDB().catch(() => console.warn('IndexedDB unavailable'));
   renderAll();
 })();
