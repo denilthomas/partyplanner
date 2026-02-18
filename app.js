@@ -1,5 +1,5 @@
 // PartyPlanner App - Core Application Logic
-// Uses localStorage for persistence
+// Uses localStorage for persistence, IndexedDB for images
 
 (function () {
   'use strict';
@@ -15,6 +15,7 @@
       moodBoardItems: [],
       plannerState: null,
       chatHistory: [],
+      uploadedImages: [], // { id, name, timestamp }
     };
     try {
       const raw = localStorage.getItem('partyplanner');
@@ -35,6 +36,125 @@
   }
 
   let data = loadData();
+
+  // ── Settings (API Key) ──
+
+  function getApiKey() {
+    return localStorage.getItem('partyplanner_openai_key') || '';
+  }
+
+  function saveApiKey(key) {
+    if (key) {
+      localStorage.setItem('partyplanner_openai_key', key);
+    } else {
+      localStorage.removeItem('partyplanner_openai_key');
+    }
+  }
+
+  // Settings modal wiring
+  const settingsBtn = document.getElementById('settings-btn');
+  const settingsForm = document.getElementById('settings-form');
+  const openaiKeyInput = document.getElementById('openai-key');
+
+  settingsBtn.addEventListener('click', () => {
+    openaiKeyInput.value = getApiKey();
+    openModal('settings-modal');
+  });
+
+  settingsForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    saveApiKey(openaiKeyInput.value.trim());
+    closeModal('settings-modal');
+  });
+
+  // ══════════════════════════════════════
+  //  IndexedDB for Image Storage
+  // ══════════════════════════════════════
+
+  const DB_NAME = 'partyplanner_images';
+  const DB_VERSION = 1;
+  const STORE_NAME = 'images';
+  let db = null;
+
+  function openDB() {
+    return new Promise((resolve, reject) => {
+      if (db) { resolve(db); return; }
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      request.onupgradeneeded = (e) => {
+        const database = e.target.result;
+        if (!database.objectStoreNames.contains(STORE_NAME)) {
+          database.createObjectStore(STORE_NAME, { keyPath: 'id' });
+        }
+      };
+      request.onsuccess = (e) => {
+        db = e.target.result;
+        resolve(db);
+      };
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  function saveImage(id, dataUrl) {
+    return openDB().then(database => {
+      return new Promise((resolve, reject) => {
+        const tx = database.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).put({ id, dataUrl, timestamp: Date.now() });
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    });
+  }
+
+  function getImage(id) {
+    return openDB().then(database => {
+      return new Promise((resolve, reject) => {
+        const tx = database.transaction(STORE_NAME, 'readonly');
+        const request = tx.objectStore(STORE_NAME).get(id);
+        request.onsuccess = () => resolve(request.result ? request.result.dataUrl : null);
+        request.onerror = () => reject(request.error);
+      });
+    });
+  }
+
+  function deleteImage(id) {
+    return openDB().then(database => {
+      return new Promise((resolve, reject) => {
+        const tx = database.transaction(STORE_NAME, 'readwrite');
+        tx.objectStore(STORE_NAME).delete(id);
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+      });
+    });
+  }
+
+  // ── Image Compression ──
+
+  function compressImage(file, maxWidth, quality) {
+    maxWidth = maxWidth || 800;
+    quality = quality || 0.7;
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let w = img.width;
+          let h = img.height;
+          if (w > maxWidth) {
+            h = Math.round((h * maxWidth) / w);
+            w = maxWidth;
+          }
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', quality));
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
 
   // ── Utility ──
 
@@ -88,6 +208,150 @@
   });
 
   // ══════════════════════════════════════
+  //  DALL-E Image Generation
+  // ══════════════════════════════════════
+
+  async function generateImageWithDallE(prompt) {
+    const apiKey = getApiKey();
+    if (!apiKey) return null;
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + apiKey,
+        },
+        body: JSON.stringify({
+          model: 'dall-e-3',
+          prompt: prompt,
+          n: 1,
+          size: '1024x1024',
+          response_format: 'b64_json',
+        }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        console.error('DALL-E error:', err);
+        return null;
+      }
+
+      const result = await response.json();
+      if (result.data && result.data[0] && result.data[0].b64_json) {
+        return 'data:image/png;base64,' + result.data[0].b64_json;
+      }
+      return null;
+    } catch (err) {
+      console.error('DALL-E request failed:', err);
+      return null;
+    }
+  }
+
+  // Build a descriptive prompt for party decor images
+  function buildImagePrompt(itemName, partyType, theme) {
+    const typeLabel = partyTypeLabels[partyType] || 'party';
+    const themeDesc = theme ? ` with a "${theme}" theme` : '';
+    return `Professional product photography of ${itemName} for a ${typeLabel}${themeDesc}. Clean white background, high quality, styled beautifully for a party supply catalog. No text or watermarks.`;
+  }
+
+  // ══════════════════════════════════════
+  //  PRE-CURATED THEME IMAGES
+  // ══════════════════════════════════════
+
+  // Curated image descriptions for AI generation, keyed by partyType
+  // These serve as the "pre-curated catalog" - when an API key is present,
+  // images are generated on demand and cached in IndexedDB
+  const curatedImagePrompts = {
+    birthday: {
+      decorations: 'Colorful birthday party table setup with balloons, streamers, and confetti, festive atmosphere',
+      tableware: 'Beautiful birthday party table setting with themed plates, cups, and napkins arranged elegantly',
+      favors: 'Cute birthday party favor bags filled with treats and small toys, wrapped with ribbons',
+      baking: 'Decorated birthday cupcakes and cake with frosting and sprinkles on a party table',
+      entertainment: 'Fun photo booth props for birthday party including hats, glasses, and signs',
+      accessories: 'Sparkly birthday party accessories including crowns, hats, and tiaras on display',
+    },
+    wedding: {
+      decorations: 'Elegant wedding reception table with white flowers, candles, and gold accents',
+      stationery: 'Beautiful calligraphy wedding place cards and invitations with floral details',
+      tableware: 'Crystal champagne flutes and fine china on a wedding reception table',
+      favors: 'Elegant wedding favor boxes with ribbons and flowers arranged on a white table',
+      accessories: 'Wedding cake cutting set with silver handles and crystal details',
+      entertainment: 'Wedding bubble tubes and sparklers arranged in a decorative display',
+    },
+    babyshower: {
+      decorations: 'Pastel baby shower decorations with balloons, banner, and stuffed animals',
+      tableware: 'Adorable baby shower table setting with themed plates and cups in soft colors',
+      entertainment: 'Baby shower game cards and activity stations set up on decorated table',
+      favors: 'Sweet baby shower favor bags with tiny baby items and thank you tags',
+      baking: 'Baby-themed cupcakes with booties, rattles, and onesie decorations on top',
+      accessories: 'Mommy-to-be sash and tiara set in pink or blue with sparkle details',
+      stationery: 'Baby shower advice cards and wishes cards with cute illustrations',
+    },
+    graduation: {
+      decorations: 'Graduation party decorations with cap-shaped balloons and congratulations banner',
+      tableware: 'Graduation party table with themed plates and cups in school colors',
+      favors: 'Graduation party favor boxes with diploma roll decorations and treats inside',
+      stationery: 'Graduation guest signing board with space for well-wishes and photos',
+      entertainment: 'Graduation photo display with pictures from kindergarten through senior year',
+    },
+    retirement: {
+      decorations: 'Elegant retirement party decorations with gold and black balloons and banner',
+      tableware: 'Sophisticated retirement party table setting with gold-rimmed plates and cups',
+      stationery: 'Retirement memory book and guestbook with gold pen on decorated table',
+      favors: 'Retirement party favor bags with gold tissue paper and thank you tags',
+    },
+    holiday: {
+      decorations: 'Festive holiday party table with garland, ornaments, and twinkling lights',
+      tableware: 'Holiday themed plates, cups, and napkins with seasonal patterns and colors',
+      baking: 'Holiday cookie decorating station with various shapes, icing, and sprinkles',
+      favors: 'Holiday party favor tins filled with homemade treats and tied with ribbon',
+    },
+    dinner: {
+      decorations: 'Sophisticated dinner party centerpiece with candles, flowers, and greenery',
+      tableware: 'Elegant dinner party place setting with charger plates, wine glasses, and linen napkins',
+      stationery: 'Handwritten dinner party menu cards and place cards with calligraphy',
+      accessories: 'Cocktail stirrers and drink garnishes arranged beautifully on a bar cart',
+    },
+    anniversary: {
+      decorations: 'Romantic anniversary party setup with rose petals, fairy lights, and candles',
+      tableware: 'Anniversary celebration table with champagne flutes and gold-rimmed plates',
+      stationery: 'Anniversary photo timeline display with pictures from throughout the years',
+      favors: 'Romantic anniversary favor boxes with hearts and gold ribbon accents',
+    },
+  };
+
+  // Generate or retrieve a cached image for a mood board item
+  async function getItemImage(item, partyType, theme) {
+    const cacheKey = 'img_' + item.id;
+
+    // Check IndexedDB cache first
+    const cached = await getImage(cacheKey).catch(() => null);
+    if (cached) return cached;
+
+    // No API key = no generation
+    const apiKey = getApiKey();
+    if (!apiKey) return null;
+
+    // Build prompt from curated templates or item name
+    const categoryPrompts = curatedImagePrompts[partyType] || {};
+    let prompt;
+    if (categoryPrompts[item.category]) {
+      const themeDesc = theme ? `, ${theme} style` : '';
+      prompt = categoryPrompts[item.category] + themeDesc + '. Professional product photo, no text.';
+    } else {
+      prompt = buildImagePrompt(item.name, partyType, theme);
+    }
+
+    const imageData = await generateImageWithDallE(prompt);
+    if (imageData) {
+      await saveImage(cacheKey, imageData).catch(() => {});
+      return imageData;
+    }
+    return null;
+  }
+
+  // ══════════════════════════════════════
   //  DIY AI PLANNER
   // ══════════════════════════════════════
 
@@ -115,7 +379,6 @@
 
   // Planner state machine stages:
   // 'ask-theme' → 'ask-guests' → 'ask-budget' → 'ask-diy' → 'generate' → 'complete'
-  const plannerStages = ['ask-theme', 'ask-guests', 'ask-budget', 'ask-diy', 'generate', 'complete'];
 
   function initPlannerState(partyType, userPrompt) {
     return {
@@ -262,13 +525,21 @@
           data.moodBoardItems = items;
           saveData(data);
 
-          addAssistantMessageWithMoodBoard(
-            buildSummaryMessage(state),
-            items
-          );
+          const hasApiKey = !!getApiKey();
+          let summary = buildSummaryMessage(state);
+          if (hasApiKey) {
+            summary += '\n\nGenerating mood board images for your theme...';
+          }
+
+          addAssistantMessageWithMoodBoard(summary, items);
 
           state.stage = 'complete';
           saveData(data);
+
+          // If API key available, generate images in background
+          if (hasApiKey) {
+            generateImagesForItems(items, state.partyType, state.theme);
+          }
         }, 1500);
         break;
       }
@@ -283,6 +554,30 @@
     const label = partyTypeLabels[state.partyType] || 'Party';
     const diyLabel = state.isDIY ? 'DIY' : 'with a coordinator';
     return `Here's your curated ${label} mood board! I picked items that match your "${escapeHtml(state.theme || 'classic')}" theme for ${state.guestCount} guests within a ${formatCurrency(state.budget)} budget (${diyLabel}).\n\nClick "Add to Bucket" on any item you like \u2014 it'll be saved to your Party Bucket with direct shopping links. You can also check the Mood Board tab for a full-screen view!`;
+  }
+
+  // ── Background Image Generation ──
+
+  async function generateImagesForItems(items, partyType, theme) {
+    // Generate images one at a time to avoid rate limits
+    for (const item of items) {
+      const imageData = await getItemImage(item, partyType, theme);
+      if (imageData) {
+        // Update the card in the chat if it exists
+        updateCardImage('mood-item-' + item.id, imageData);
+        // Also update mood board tab card if visible
+        updateCardImage('moodboard-card-' + item.id, imageData);
+      }
+    }
+  }
+
+  function updateCardImage(cardId, imageDataUrl) {
+    const card = document.getElementById(cardId);
+    if (!card) return;
+    const visual = card.querySelector('.mood-item-visual, .moodboard-card-visual');
+    if (!visual) return;
+    // Replace emoji/loading with the image
+    visual.innerHTML = '<img src="' + imageDataUrl + '" alt="Mood board image" loading="lazy">';
   }
 
   // ── Chat Input Handling ──
@@ -350,6 +645,10 @@
               'Here are some more options for your party! Pick the ones you like:',
               items
             );
+            // Generate images for new items too
+            if (getApiKey()) {
+              generateImagesForItems(items, state.partyType, state.theme);
+            }
           } else {
             addAssistantMessage(
               'Your mood board is ready above! You can say "show me more options" to see additional items, or browse your Party Bucket to review what you\'ve picked. You can also explore the Mood Board and Budget Tracker tabs for more features.',
@@ -434,9 +733,18 @@
     card.id = 'mood-item-' + item.id;
 
     const storeUrl = getStoreUrl(item.name, item.store);
+    const hasApiKey = !!getApiKey();
+
+    // Show loading state if API key available, otherwise emoji
+    let visualContent;
+    if (hasApiKey) {
+      visualContent = '<div class="img-loading"><div class="spinner"></div><span>Generating...</span></div>';
+    } else {
+      visualContent = item.emoji;
+    }
 
     card.innerHTML = `
-      <div class="mood-item-visual">${item.emoji}</div>
+      <div class="mood-item-visual">${visualContent}</div>
       <div class="mood-item-info">
         <span class="mood-item-name">${escapeHtml(item.name)}</span>
         <span class="mood-item-price">${formatCurrency(item.price)}</span>
@@ -453,6 +761,14 @@
     card.querySelector('[data-item-id]').addEventListener('click', () => {
       toggleBucketItem(item);
     });
+
+    // Check IndexedDB for cached image
+    const cacheKey = 'img_' + item.id;
+    getImage(cacheKey).then(cached => {
+      if (cached) {
+        updateCardImage('mood-item-' + item.id, cached);
+      }
+    }).catch(() => {});
 
     return card;
   }
@@ -536,10 +852,6 @@
 
   function randomStore() {
     return storeNames[Math.floor(Math.random() * storeNames.length)];
-  }
-
-  function randomPrice(min, max) {
-    return Math.round((Math.random() * (max - min) + min) * 100) / 100;
   }
 
   function generateMoodBoardItems(state) {
@@ -1022,17 +1334,36 @@
   function renderMoodBoard() {
     const grid = document.getElementById('moodboard-grid');
     const allItems = data.moodBoardItems || [];
+    const uploads = data.uploadedImages || [];
 
-    if (allItems.length === 0) {
-      grid.innerHTML = '<div class="moodboard-empty">No mood board items yet. Use the DIY AI Planner to generate themed suggestions for your party!</div>';
+    if (allItems.length === 0 && uploads.length === 0) {
+      grid.innerHTML = '<div class="moodboard-empty">No mood board items yet. Use the DIY AI Planner to generate themed suggestions, or upload your own inspiration images!</div>';
       return;
     }
 
-    grid.innerHTML = allItems.map(item => {
+    let html = '';
+
+    // Render uploaded images first
+    uploads.forEach(img => {
+      html += `
+        <div class="moodboard-card uploaded" id="moodboard-upload-${img.id}">
+          <div class="moodboard-card-visual">
+            <div class="img-loading"><div class="spinner"></div></div>
+            <button class="moodboard-card-delete" onclick="app.deleteUploadedImage('${img.id}')">&times;</button>
+          </div>
+          <div class="moodboard-card-info">
+            <span class="moodboard-card-name">${escapeHtml(img.name)}</span>
+          </div>
+        </div>
+      `;
+    });
+
+    // Render AI-generated/planner items
+    allItems.forEach(item => {
       const storeUrl = getStoreUrl(item.name, item.store);
       const inBucket = isInBucket(item.id);
-      return `
-        <div class="moodboard-card">
+      html += `
+        <div class="moodboard-card" id="moodboard-card-${item.id}">
           <div class="moodboard-card-visual">${item.emoji}</div>
           <div class="moodboard-card-info">
             <span class="moodboard-card-name">${escapeHtml(item.name)}</span>
@@ -1045,13 +1376,84 @@
           </div>
         </div>
       `;
-    }).join('');
+    });
+
+    grid.innerHTML = html;
+
+    // Load uploaded images from IndexedDB
+    uploads.forEach(img => {
+      getImage('upload_' + img.id).then(dataUrl => {
+        if (dataUrl) {
+          const card = document.getElementById('moodboard-upload-' + img.id);
+          if (card) {
+            const visual = card.querySelector('.moodboard-card-visual');
+            // Keep delete button, replace loading with image
+            visual.innerHTML = `<img src="${dataUrl}" alt="${escapeHtml(img.name)}" loading="lazy"><button class="moodboard-card-delete" onclick="app.deleteUploadedImage('${img.id}')">&times;</button>`;
+          }
+        }
+      }).catch(() => {});
+    });
+
+    // Load cached AI images for planner items
+    allItems.forEach(item => {
+      getImage('img_' + item.id).then(dataUrl => {
+        if (dataUrl) {
+          updateCardImage('moodboard-card-' + item.id, dataUrl);
+        }
+      }).catch(() => {});
+    });
   }
 
   function toggleMoodBoardItem(itemId) {
     const item = (data.moodBoardItems || []).find(i => i.id === itemId);
     if (!item) return;
     toggleBucketItem(item);
+  }
+
+  // ══════════════════════════════════════
+  //  USER IMAGE UPLOAD
+  // ══════════════════════════════════════
+
+  const uploadBtn = document.getElementById('upload-image-btn');
+  const uploadInput = document.getElementById('upload-image-input');
+
+  uploadBtn.addEventListener('click', () => {
+    uploadInput.click();
+  });
+
+  uploadInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+
+      const id = generateId();
+      const name = file.name.replace(/\.[^.]+$/, ''); // strip extension
+
+      // Compress and store
+      const compressed = await compressImage(file, 800, 0.7);
+      await saveImage('upload_' + id, compressed).catch(() => {});
+
+      // Save metadata
+      if (!data.uploadedImages) data.uploadedImages = [];
+      data.uploadedImages.push({ id, name, timestamp: Date.now() });
+      saveData(data);
+    }
+
+    // Reset input so same file can be re-selected
+    uploadInput.value = '';
+
+    // Re-render mood board
+    renderMoodBoard();
+  });
+
+  function deleteUploadedImage(id) {
+    if (!confirm('Delete this uploaded image?')) return;
+    data.uploadedImages = (data.uploadedImages || []).filter(img => img.id !== id);
+    saveData(data);
+    deleteImage('upload_' + id).catch(() => {});
+    renderMoodBoard();
   }
 
   // ══════════════════════════════════════
@@ -1075,8 +1477,10 @@
     deleteExpense,
     removeBucketItem,
     toggleMoodBoardItem,
+    deleteUploadedImage,
   };
 
   // ── Init ──
+  openDB().catch(() => console.warn('IndexedDB unavailable, image storage disabled'));
   renderAll();
 })();
