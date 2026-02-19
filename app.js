@@ -750,8 +750,23 @@
     anniversary: '\u{1F495}',
   };
 
-  // State machine:
-  // ask-theme → ask-guests → ask-budget → ask-diy → show-inspiration → generate → complete
+  // Category color map for product card visuals (replaces emoji)
+  const categoryStyles = {
+    decorations: { gradient: 'linear-gradient(135deg, #ffecd2, #fcb69f)', label: 'Decor' },
+    tableware:   { gradient: 'linear-gradient(135deg, #a1c4fd, #c2e9fb)', label: 'Tableware' },
+    entertainment: { gradient: 'linear-gradient(135deg, #d4fc79, #96e6a1)', label: 'Fun' },
+    favors:      { gradient: 'linear-gradient(135deg, #f093fb, #f5576c)', label: 'Favors' },
+    stationery:  { gradient: 'linear-gradient(135deg, #fff1c1, #f7c948)', label: 'Stationery' },
+    accessories: { gradient: 'linear-gradient(135deg, #667eea, #764ba2)', label: 'Accessories' },
+    baking:      { gradient: 'linear-gradient(135deg, #f6d365, #fda085)', label: 'Baking' },
+  };
+
+  function getCategoryStyle(category) {
+    return categoryStyles[category] || { gradient: 'linear-gradient(135deg, #dfe6e9, #b2bec3)', label: category || 'Item' };
+  }
+
+  // Conversational planner — no rigid state machine.
+  // The agent tracks what info it still needs and detects user intent.
 
   function initPlannerState(partyType, userPrompt) {
     return {
@@ -1111,18 +1126,27 @@
       return { ...p, name };
     });
 
-    // Scale prices to fit budget
-    const totalRaw = products.reduce((s, p) => s + p.price, 0);
-    const scale = totalRaw > 0 ? (budget * 0.7) / totalRaw : 1;
+    // Use real catalog prices — no artificial scaling.
+    // Assign a retailer per item deterministically based on product name.
+    return products.map(p => {
+      const storeIdx = Math.abs(hashString(p.name)) % storeNames.length;
+      return {
+        id: generateId(),
+        name: p.name,
+        price: p.price,
+        store: storeNames[storeIdx],
+        category: p.category,
+      };
+    });
+  }
 
-    return products.map(p => ({
-      id: generateId(),
-      name: p.name,
-      emoji: p.emoji,
-      price: Math.max(2.99, Math.round(p.price * scale * 100) / 100),
-      store: storeNames[Math.floor(Math.random() * storeNames.length)],
-      category: p.category,
-    }));
+  function hashString(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) - hash) + str.charCodeAt(i);
+      hash |= 0;
+    }
+    return hash;
   }
 
   function extractThemeAdjective(theme) {
@@ -1180,13 +1204,218 @@
     processUserInput(text);
   }
 
+  // ── Intent Detection ──
+  // Understands what the user is saying regardless of current stage.
+
+  function detectIntent(text) {
+    const lower = text.toLowerCase().trim();
+
+    // Detect explicit party type mention → user wants to change/set theme
+    const typeKeywords = {
+      birthday: ['birthday', 'bday', 'b-day'],
+      wedding: ['wedding', 'bridal'],
+      babyshower: ['baby shower', 'babyshower'],
+      graduation: ['graduation', 'grad party', 'commencement'],
+      retirement: ['retirement', 'retiring'],
+      holiday: ['holiday', 'christmas', 'halloween', 'thanksgiving', 'new year'],
+      dinner: ['dinner party', 'dinner gathering', 'supper'],
+      anniversary: ['anniversary'],
+    };
+
+    // Detect correction / "go back" intent
+    if (/\b(change|switch|go back|redo|actually|instead|wait|no i meant|i meant)\b/.test(lower)) {
+      // Check if they're changing the party type specifically
+      for (const [type, kws] of Object.entries(typeKeywords)) {
+        if (kws.some(k => lower.includes(k))) {
+          return { intent: 'switch-party-type', partyType: type, raw: text };
+        }
+      }
+      // Check if changing theme
+      if (/theme|style|vibe|look/.test(lower)) {
+        return { intent: 'change-theme', raw: text };
+      }
+      // Check if changing guest count
+      if (/guests?|people|headcount/.test(lower)) {
+        const num = parseInt((lower.match(/(\d+)/) || [])[1], 10);
+        return { intent: 'set-guests', count: num || null, raw: text };
+      }
+      // Check if changing budget
+      if (/budget|spend|cost|price/.test(lower)) {
+        const amt = parseFloat((lower.match(/[\$]?\s*([\d,]+\.?\d*)/) || [])[1]);
+        return { intent: 'set-budget', amount: amt || null, raw: text };
+      }
+      // Generic correction — re-ask current question
+      return { intent: 'correction', raw: text };
+    }
+
+    // Detect guest count anywhere (e.g. "30 people", "expecting 50 guests")
+    const guestMatch = lower.match(/(\d+)\s*(people|guests?|persons?|folks|attendees?|friends|family)/);
+    if (guestMatch) {
+      return { intent: 'set-guests', count: parseInt(guestMatch[1], 10), raw: text };
+    }
+
+    // Detect budget anywhere (e.g. "$500", "budget is 1000", "spend about 300")
+    if (/budget|spend|afford|cost/.test(lower)) {
+      const amt = parseFloat((lower.match(/[\$]?\s*([\d,]+\.?\d*)/) || [])[1]);
+      if (amt > 0) return { intent: 'set-budget', amount: amt, raw: text };
+    }
+
+    // Detect DIY preference
+    if (/\b(diy|do it myself|doing it myself|on my own|by myself)\b/.test(lower)) {
+      return { intent: 'set-diy', isDIY: true, raw: text };
+    }
+    if (/\b(coordinator|planner|professional|hired help|event planner)\b/.test(lower)) {
+      return { intent: 'set-diy', isDIY: false, raw: text };
+    }
+
+    // Detect "more options" / "show different"
+    if (/\b(more|different|other|another|regenerate|again|redo)\b/.test(lower) && /\b(option|scene|inspiration|look|idea|style|choice)\b/.test(lower)) {
+      return { intent: 'more-options', raw: text };
+    }
+
+    // Detect "start over"
+    if (/\b(start over|restart|begin again|new plan)\b/.test(lower)) {
+      return { intent: 'restart', raw: text };
+    }
+
+    // Check for a party type mention without a correction keyword
+    for (const [type, kws] of Object.entries(typeKeywords)) {
+      if (kws.some(k => lower.includes(k))) {
+        return { intent: 'set-theme-type', partyType: type, raw: text };
+      }
+    }
+
+    // Default — treat as a direct answer to whatever the agent last asked
+    return { intent: 'answer', raw: text };
+  }
+
   function processUserInput(text) {
     const state = data.plannerState;
     if (!state) return;
 
+    const intent = detectIntent(text);
+
+    // ── Handle intents that work regardless of current stage ──
+
+    if (intent.intent === 'restart') {
+      showTypingThen(() => {
+        addAssistantMessage("No problem! Let's start fresh. What kind of party are you planning?");
+      });
+      state.stage = 'ask-theme';
+      state.theme = '';
+      state.guestCount = null;
+      state.budget = null;
+      state.isDIY = null;
+      state.selectedScenes = [];
+      saveData(data);
+      return;
+    }
+
+    if (intent.intent === 'switch-party-type') {
+      const oldType = state.partyType;
+      state.partyType = intent.partyType;
+      state.theme = text;
+      state.selectedScenes = [];
+      // Keep answers the user already gave, just move forward
+      if (!state.guestCount) {
+        state.stage = 'ask-guests';
+      } else if (!state.budget) {
+        state.stage = 'ask-budget';
+      } else if (state.isDIY === null) {
+        state.stage = 'ask-diy';
+      } else {
+        state.stage = 'show-inspiration';
+      }
+      saveData(data);
+      const label = partyTypeLabels[intent.partyType] || 'party';
+      showTypingThen(() => {
+        addAssistantMessage(`Got it — switching to a ${label}!`);
+        setTimeout(() => advancePlanner(), 400);
+      });
+      return;
+    }
+
+    if (intent.intent === 'change-theme') {
+      state.stage = 'ask-theme';
+      state.selectedScenes = [];
+      saveData(data);
+      showTypingThen(() => {
+        addAssistantMessage("Sure! What theme or style would you prefer instead?", [
+          { text: 'Elegant & Classic', value: 'elegant and classic theme' },
+          { text: 'Rustic & Natural', value: 'rustic and natural theme' },
+          { text: 'Fun & Colorful', value: 'fun and colorful theme' },
+          { text: 'Minimalist & Modern', value: 'minimalist and modern theme' },
+        ]);
+      });
+      return;
+    }
+
+    if (intent.intent === 'correction') {
+      // User said "actually…" / "wait" without a clear new value — re-ask current question
+      showTypingThen(() => {
+        addAssistantMessage("No worries! What would you like to change? You can update the theme, guest count, budget, or anything else.");
+      });
+      return;
+    }
+
+    if (intent.intent === 'set-guests' && intent.count && intent.count > 0) {
+      state.guestCount = intent.count;
+      saveData(data);
+      if (state.stage === 'ask-guests' || state.stage === 'ask-theme') {
+        state.stage = state.budget ? (state.isDIY !== null ? 'show-inspiration' : 'ask-diy') : 'ask-budget';
+        saveData(data);
+      }
+      showTypingThen(() => {
+        addAssistantMessage(`Got it — planning for ${state.guestCount} guests!`);
+        setTimeout(() => advancePlanner(), 400);
+      });
+      return;
+    }
+
+    if (intent.intent === 'set-budget' && intent.amount && intent.amount > 0) {
+      state.budget = intent.amount;
+      saveData(data);
+      if (state.stage === 'ask-budget' || state.stage === 'ask-guests') {
+        state.stage = state.isDIY !== null ? 'show-inspiration' : 'ask-diy';
+        saveData(data);
+      }
+      showTypingThen(() => {
+        addAssistantMessage(`Budget set to ${formatCurrency(state.budget)}!`);
+        setTimeout(() => advancePlanner(), 400);
+      });
+      return;
+    }
+
+    if (intent.intent === 'set-diy') {
+      state.isDIY = intent.isDIY;
+      if (state.stage === 'ask-diy') {
+        state.stage = 'show-inspiration';
+      }
+      saveData(data);
+      advancePlanner();
+      return;
+    }
+
+    if (intent.intent === 'more-options') {
+      state.stage = 'show-inspiration';
+      state.selectedScenes = [];
+      saveData(data);
+      advancePlanner();
+      return;
+    }
+
+    // ── Default: treat as answer to the current stage's question ──
+    handleStageAnswer(text);
+  }
+
+  function handleStageAnswer(text) {
+    const state = data.plannerState;
+
     switch (state.stage) {
       case 'ask-theme': {
         state.theme = text;
+        const detected = detectPartyType(text);
+        if (detected) state.partyType = detected;
         state.stage = 'ask-guests';
         saveData(data);
         advancePlanner();
@@ -1217,31 +1446,22 @@
         break;
       }
       case 'show-inspiration': {
-        // User typed something while viewing inspiration - nudge them to select
         showTypingThen(() => {
           addAssistantMessage(
-            'Tap on the scene images above that you love, then click the "Continue" button! You can select as many as you like.',
+            'Tap on the scene images above that you love, then click the "Continue" button!'
           );
         });
         break;
       }
       case 'complete': {
         showTypingThen(() => {
-          if (text.toLowerCase().includes('more') || text.toLowerCase().includes('different') || text.toLowerCase().includes('regenerate')) {
-            // Show inspiration again for re-selection
-            state.stage = 'show-inspiration';
-            state.selectedScenes = [];
-            saveData(data);
-            advancePlanner();
-          } else {
-            addAssistantMessage(
-              'Your mood board is ready! You can say "show me more options" to browse different inspiration, or check your Party Bucket for items you\'ve picked.',
-              [
-                { text: 'Show me more options', value: 'show me more different options' },
-                { text: 'View Party Bucket', value: '__toggle_bucket__' },
-              ]
-            );
-          }
+          addAssistantMessage(
+            'Your recommendations are ready! Say "show me more options" to browse different inspiration, or check your Party Bucket.',
+            [
+              { text: 'More options', value: 'show me different options' },
+              { text: 'View Party Bucket', value: '__toggle_bucket__' },
+            ]
+          );
         });
         break;
       }
@@ -1320,16 +1540,17 @@
 
     const storeUrl = getStoreUrl(item.name, item.store);
     const hasApiKey = !!getApiKey();
+    const catStyle = getCategoryStyle(item.category);
 
     let visualContent;
     if (hasApiKey) {
-      visualContent = '<div class="img-loading"><div class="spinner"></div><span>Generating...</span></div>';
+      visualContent = `<div class="mood-item-visual"><div class="img-loading"><div class="spinner"></div><span>Loading...</span></div></div>`;
     } else {
-      visualContent = item.emoji;
+      visualContent = `<div class="mood-item-visual" style="background: ${catStyle.gradient}"><span class="mood-item-cat-label">${escapeHtml(catStyle.label)}</span></div>`;
     }
 
     card.innerHTML = `
-      <div class="mood-item-visual">${visualContent}</div>
+      ${visualContent}
       <div class="mood-item-info">
         <span class="mood-item-name">${escapeHtml(item.name)}</span>
         <span class="mood-item-price">${formatCurrency(item.price)}</span>
@@ -1339,7 +1560,7 @@
         <button class="btn ${isInBucket(item.id) ? 'btn-in-bucket' : 'btn-add-bucket'}" data-item-id="${item.id}">
           ${isInBucket(item.id) ? 'In Bucket' : 'Add to Bucket'}
         </button>
-        <a href="${escapeHtml(storeUrl)}" target="_blank" rel="noopener" class="btn-view-store">Shop</a>
+        <a href="${escapeHtml(storeUrl)}" target="_blank" rel="noopener" class="btn-view-store">View on ${escapeHtml(item.store)}</a>
       </div>
     `;
 
@@ -1473,25 +1694,110 @@
     const total = data.partyBucket.reduce((s, item) => s + item.price, 0);
     document.getElementById('bucket-total-price').textContent = formatCurrency(total);
 
+    // Update checkout button
+    const checkoutBtn = document.getElementById('bucket-checkout-btn');
+    if (checkoutBtn) {
+      checkoutBtn.textContent = count > 0 ? `Checkout — ${formatCurrency(total)}` : 'Checkout';
+      checkoutBtn.disabled = count === 0;
+    }
+
     if (count === 0) {
       bucketItemsEl.innerHTML = '<div class="bucket-empty">Your party bucket is empty. Add items from the mood board!</div>';
       return;
     }
 
     bucketItemsEl.innerHTML = data.partyBucket.map(item => {
-      const storeUrl = getStoreUrl(item.name, item.store);
+      const catStyle = getCategoryStyle(item.category);
       return `
         <div class="bucket-item">
-          <span class="bucket-item-icon">${item.emoji}</span>
+          <div class="bucket-item-swatch" style="background: ${catStyle.gradient}"></div>
           <div class="bucket-item-info">
             <span class="bucket-item-name">${escapeHtml(item.name)}</span>
-            <span class="bucket-item-price">${formatCurrency(item.price)}</span>
-            <a href="${escapeHtml(storeUrl)}" target="_blank" rel="noopener" class="bucket-item-store-link">Buy at ${escapeHtml(item.store)}</a>
+            <span class="bucket-item-price">${formatCurrency(item.price)} <span class="bucket-item-store-tag">via ${escapeHtml(item.store)}</span></span>
           </div>
           <button class="bucket-item-remove" onclick="app.removeBucketItem('${item.id}')">&times;</button>
         </div>
       `;
     }).join('');
+  }
+
+  // ── Unified Checkout ──
+
+  function initCheckout() {
+    const checkoutBtn = document.getElementById('bucket-checkout-btn');
+    const checkoutPanel = document.getElementById('checkout-panel');
+    const checkoutForm = document.getElementById('checkout-form');
+    const backBtn = document.getElementById('checkout-back-btn');
+
+    if (!checkoutBtn) return;
+
+    checkoutBtn.addEventListener('click', () => {
+      if (data.partyBucket.length === 0) return;
+      document.getElementById('bucket-items').classList.add('hidden');
+      document.getElementById('bucket-footer').classList.add('hidden');
+      checkoutPanel.classList.remove('hidden');
+      renderCheckoutSummary();
+    });
+
+    backBtn.addEventListener('click', () => {
+      checkoutPanel.classList.add('hidden');
+      document.getElementById('bucket-items').classList.remove('hidden');
+      document.getElementById('bucket-footer').classList.remove('hidden');
+    });
+
+    checkoutForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      const formData = {
+        name: document.getElementById('checkout-name').value.trim(),
+        email: document.getElementById('checkout-email').value.trim(),
+        address: document.getElementById('checkout-address').value.trim(),
+        card: document.getElementById('checkout-card').value.trim(),
+        expiry: document.getElementById('checkout-expiry').value.trim(),
+        cvv: document.getElementById('checkout-cvv').value.trim(),
+      };
+
+      // Simulate order placement
+      checkoutPanel.innerHTML = `
+        <div class="checkout-success">
+          <div class="checkout-success-icon">&#x2714;</div>
+          <h4>Order Placed!</h4>
+          <p>Your party supplies are on the way to <strong>${escapeHtml(formData.name)}</strong>.</p>
+          <p class="checkout-success-detail">Confirmation sent to <strong>${escapeHtml(formData.email)}</strong></p>
+          <p class="checkout-success-detail">${data.partyBucket.length} items — ${formatCurrency(data.partyBucket.reduce((s, i) => s + i.price, 0))}</p>
+          <button class="btn btn-primary" id="checkout-done-btn">Done</button>
+        </div>
+      `;
+      document.getElementById('checkout-done-btn').addEventListener('click', () => {
+        data.partyBucket = [];
+        saveData(data);
+        updateBucketUI();
+        checkoutPanel.classList.add('hidden');
+        checkoutPanel.innerHTML = '';
+        document.getElementById('bucket-items').classList.remove('hidden');
+        document.getElementById('bucket-footer').classList.remove('hidden');
+        toggleBucketPanel();
+      });
+    });
+  }
+
+  function renderCheckoutSummary() {
+    const el = document.getElementById('checkout-summary');
+    if (!el) return;
+    const total = data.partyBucket.reduce((s, item) => s + item.price, 0);
+    el.innerHTML = `
+      <div class="checkout-summary-items">
+        ${data.partyBucket.map(item => `
+          <div class="checkout-line-item">
+            <span>${escapeHtml(item.name)}</span>
+            <span>${formatCurrency(item.price)}</span>
+          </div>
+        `).join('')}
+      </div>
+      <div class="checkout-summary-total">
+        <strong>Total</strong>
+        <strong>${formatCurrency(total)}</strong>
+      </div>
+    `;
   }
 
   function refreshMoodItemCards() {
@@ -1775,9 +2081,12 @@
     allItems.forEach(item => {
       const storeUrl = getStoreUrl(item.name, item.store);
       const inBucket = isInBucket(item.id);
+      const catStyle = getCategoryStyle(item.category);
       html += `
         <div class="moodboard-card" id="moodboard-card-${item.id}">
-          <div class="moodboard-card-visual">${item.emoji}</div>
+          <div class="moodboard-card-visual" style="background: ${catStyle.gradient}">
+            <span class="moodboard-card-cat-label">${escapeHtml(catStyle.label)}</span>
+          </div>
           <div class="moodboard-card-info">
             <span class="moodboard-card-name">${escapeHtml(item.name)}</span>
             <span class="moodboard-card-price">${formatCurrency(item.price)}</span>
@@ -1785,7 +2094,7 @@
           </div>
           <div class="moodboard-card-actions">
             <button class="btn ${inBucket ? 'btn-in-bucket' : 'btn-add-bucket'}" onclick="app.toggleMoodBoardItem('${item.id}')">${inBucket ? 'In Bucket' : 'Add to Bucket'}</button>
-            <a href="${escapeHtml(storeUrl)}" target="_blank" rel="noopener" class="btn btn-secondary">Shop</a>
+            <a href="${escapeHtml(storeUrl)}" target="_blank" rel="noopener" class="btn btn-secondary">View on ${escapeHtml(item.store)}</a>
           </div>
         </div>
       `;
@@ -1867,6 +2176,7 @@
     renderExpenses();
     renderMoodBoard();
     updateBucketUI();
+    initCheckout();
     restorePlannerState();
   }
 
