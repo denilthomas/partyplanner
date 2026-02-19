@@ -24,7 +24,12 @@
       </div>
       <form id="settings-form">
         <div class="form-group">
-          <label for="openai-key">OpenAI API Key (for AI-generated mood board images)</label>
+          <label for="anthropic-key">Anthropic API Key (powers the AI planner)</label>
+          <input type="password" id="anthropic-key" placeholder="sk-ant-...">
+          <p class="form-hint">Get your key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. Powers the conversational planner with Claude Opus 4.6.</p>
+        </div>
+        <div class="form-group">
+          <label for="openai-key">OpenAI API Key (optional — AI-generated images)</label>
           <input type="password" id="openai-key" placeholder="sk-...">
           <p class="form-hint">Get your key at <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">platform.openai.com/api-keys</a>. Costs ~$0.04 per image. Key is stored locally in your browser only.</p>
         </div>

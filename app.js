@@ -37,34 +37,234 @@
 
   let data = loadData();
 
-  // ── Settings (API Key) ──
+  // ── Settings (API Keys) ──
 
   function getApiKey() {
     return localStorage.getItem('partyplanner_openai_key') || '';
   }
 
   function saveApiKey(key) {
-    if (key) {
-      localStorage.setItem('partyplanner_openai_key', key);
-    } else {
-      localStorage.removeItem('partyplanner_openai_key');
-    }
+    if (key) localStorage.setItem('partyplanner_openai_key', key);
+    else localStorage.removeItem('partyplanner_openai_key');
+  }
+
+  function getAnthropicKey() {
+    return localStorage.getItem('partyplanner_anthropic_key') || '';
+  }
+
+  function saveAnthropicKey(key) {
+    if (key) localStorage.setItem('partyplanner_anthropic_key', key);
+    else localStorage.removeItem('partyplanner_anthropic_key');
+  }
+
+  function isLLMMode() {
+    return !!getAnthropicKey();
   }
 
   const settingsBtn = document.getElementById('settings-btn');
   const settingsForm = document.getElementById('settings-form');
   const openaiKeyInput = document.getElementById('openai-key');
+  const anthropicKeyInput = document.getElementById('anthropic-key');
 
   settingsBtn.addEventListener('click', () => {
     openaiKeyInput.value = getApiKey();
+    anthropicKeyInput.value = getAnthropicKey();
     openModal('settings-modal');
   });
 
   settingsForm.addEventListener('submit', (e) => {
     e.preventDefault();
     saveApiKey(openaiKeyInput.value.trim());
+    saveAnthropicKey(anthropicKeyInput.value.trim());
     closeModal('settings-modal');
   });
+
+  // ══════════════════════════════════════
+  //  Claude Opus 4.6 — LLM Party Planner
+  // ══════════════════════════════════════
+
+  const PLANNER_SYSTEM = [
+    'You are a friendly, knowledgeable party planner AI assistant built into the PartyPlanner app.',
+    'You help users plan events by gathering their preferences through natural conversation.',
+    '',
+    'Information to gather (naturally, not all at once):',
+    '1. Party type: birthday, wedding, babyshower, graduation, retirement, holiday, dinner, or anniversary',
+    '2. Theme or style (e.g. "rustic", "elegant", "fun and colorful")',
+    '3. Approximate guest count',
+    '4. Budget',
+    '5. DIY or with a coordinator',
+    '',
+    'Guidelines:',
+    '- Keep responses concise: 1-3 sentences.',
+    '- Be warm and enthusiastic.',
+    '- React to what the user actually says. If they change their mind, acknowledge it naturally.',
+    '- Do not repeat questions the user already answered.',
+    '- Once you know the party type and have had at least a brief exchange about preferences, call the show_inspiration tool.',
+    '- Do NOT wait until you have every detail — show inspiration early so the user can browse scenes.',
+    '- After the user selects scenes, the app auto-generates product recommendations. Summarize what was picked and encourage them to add items to their Party Bucket.',
+    '- Never make up product prices or availability.',
+  ].join('\n');
+
+  const PLANNER_TOOLS = [
+    {
+      name: 'show_inspiration',
+      description: 'Display a grid of visual inspiration scenes for the user to browse and select. Call this when you have identified the party type and at least one preference. The user will tap scenes they love, and products will be auto-recommended.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          party_type: {
+            type: 'string',
+            enum: ['birthday', 'wedding', 'babyshower', 'graduation', 'retirement', 'holiday', 'dinner', 'anniversary'],
+            description: 'The type of party',
+          },
+          theme: { type: 'string', description: 'Theme or style, if known' },
+          guest_count: { type: 'number', description: 'Expected guest count, if known' },
+          budget: { type: 'number', description: 'Budget in dollars, if known' },
+          is_diy: { type: 'boolean', description: 'Whether doing DIY, if known' },
+        },
+        required: ['party_type'],
+      },
+    },
+  ];
+
+  async function callClaude(apiMessages) {
+    const apiKey = getAnthropicKey();
+    if (!apiKey) return null;
+
+    try {
+      const res = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-opus-4-6',
+          max_tokens: 1024,
+          system: PLANNER_SYSTEM,
+          tools: PLANNER_TOOLS,
+          messages: apiMessages,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error('Claude API error:', err);
+        return { error: (err.error && err.error.message) || 'API request failed' };
+      }
+
+      return await res.json();
+    } catch (err) {
+      console.error('Claude API request failed:', err);
+      return { error: err.message || 'Network error' };
+    }
+  }
+
+  // Send the current conversation to Claude and handle the response.
+  async function sendToLLM() {
+    const state = data.plannerState;
+    if (!state || !state.apiMessages) return;
+
+    // Typing indicator
+    const typingEl = document.createElement('div');
+    typingEl.className = 'chat-message assistant';
+    typingEl.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    chatMessages.appendChild(typingEl);
+    scrollChatToBottom();
+    chatInput.disabled = true;
+
+    const result = await callClaude(state.apiMessages);
+    typingEl.remove();
+    chatInput.disabled = false;
+    chatInput.focus();
+
+    if (!result || result.error) {
+      const msg = result && result.error ? result.error : 'Could not reach the API.';
+      addAssistantMessage('Sorry, something went wrong: ' + msg + '\n\nPlease check your Anthropic API key in Settings.');
+      return;
+    }
+
+    // Collect text and tool_use blocks
+    const content = result.content || [];
+    const textParts = content.filter(b => b.type === 'text').map(b => b.text);
+    const toolUses = content.filter(b => b.type === 'tool_use');
+
+    // Append full assistant message to API history
+    state.apiMessages.push({ role: 'assistant', content: content });
+
+    // Display text
+    if (textParts.length > 0) {
+      addAssistantMessage(textParts.join('\n'));
+    }
+
+    // Handle tool calls
+    for (const tool of toolUses) {
+      if (tool.name === 'show_inspiration') {
+        const inp = tool.input || {};
+        if (inp.party_type) state.partyType = inp.party_type;
+        if (inp.theme) state.theme = inp.theme;
+        if (inp.guest_count) state.guestCount = inp.guest_count;
+        if (inp.budget) state.budget = inp.budget;
+        if (inp.is_diy !== undefined) state.isDIY = inp.is_diy;
+        state.stage = 'show-inspiration';
+        state.pendingToolId = tool.id;
+
+        const scenes = inspirationScenes[state.partyType] || inspirationScenes.birthday;
+        addInspirationGrid(scenes);
+      }
+    }
+
+    saveData(data);
+  }
+
+  // After the user selects scenes in LLM mode, send the tool result and show products.
+  async function handleLLMSceneSelection(sceneNames, items) {
+    const state = data.plannerState;
+
+    // Send tool result
+    state.apiMessages.push({
+      role: 'user',
+      content: [
+        {
+          type: 'tool_result',
+          tool_use_id: state.pendingToolId,
+          content: 'The user selected these inspiration scenes: ' + sceneNames + '. Product recommendations have been auto-generated and displayed. Summarize the picks and encourage the user to review and add items to their Party Bucket.',
+        },
+      ],
+    });
+    state.pendingToolId = null;
+    saveData(data);
+
+    // Show products immediately
+    addAssistantMessageWithMoodBoard('', items);
+
+    // Get Claude's commentary
+    const typingEl = document.createElement('div');
+    typingEl.className = 'chat-message assistant';
+    typingEl.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    chatMessages.appendChild(typingEl);
+    scrollChatToBottom();
+
+    const result = await callClaude(state.apiMessages);
+    typingEl.remove();
+
+    if (result && !result.error && result.content) {
+      const texts = result.content.filter(b => b.type === 'text').map(b => b.text);
+      if (texts.length > 0) {
+        addAssistantMessage(texts.join('\n'));
+      }
+      state.apiMessages.push({ role: 'assistant', content: result.content });
+    }
+
+    state.stage = 'complete';
+    saveData(data);
+
+    if (getApiKey()) {
+      generateImagesForItems(items, state.partyType, state.theme);
+    }
+  }
 
   // ══════════════════════════════════════
   //  IndexedDB for Image Storage
@@ -825,6 +1025,7 @@
 
   function startPlanner(partyType, userPrompt) {
     data.plannerState = initPlannerState(partyType, userPrompt);
+    data.plannerState.apiMessages = [];
     data.chatHistory = [];
     data.moodBoardItems = [];
     saveData(data);
@@ -837,11 +1038,18 @@
 
     chatMessages.innerHTML = '';
 
-    if (userPrompt) {
-      addChatMessage('user', userPrompt);
+    if (isLLMMode()) {
+      // LLM-powered flow
+      const firstMsg = userPrompt || ('I want to plan a ' + (partyTypeLabels[partyType] || 'party'));
+      addChatMessage('user', firstMsg);
+      data.plannerState.apiMessages.push({ role: 'user', content: firstMsg });
+      saveData(data);
+      sendToLLM();
+    } else {
+      // Fallback: hardcoded flow
+      if (userPrompt) addChatMessage('user', userPrompt);
+      advancePlanner();
     }
-
-    advancePlanner();
   }
 
   function advancePlanner() {
@@ -919,13 +1127,10 @@
       }
       case 'generate': {
         showTypingThen(() => {
-          const items = generateProductsFromScenes(state);
-          data.moodBoardItems = items;
-          saveData(data);
-
+          const items = data.moodBoardItems || [];
           const sceneCount = state.selectedScenes.length;
           addAssistantMessage(
-            `Based on the ${sceneCount} look${sceneCount > 1 ? 's' : ''} you picked, here's what I recommend to bring it to life!\n\nThese items match the scenes you loved, scaled for ${state.guestCount} guests within your ${formatCurrency(state.budget)} budget. Click "Add to Bucket" on the ones you want!`
+            `Based on the ${sceneCount} look${sceneCount > 1 ? 's' : ''} you picked, here's what I recommend to bring it to life! Click "Add to Bucket" on the ones you want.`
           );
 
           addAssistantMessageWithMoodBoard('', items);
@@ -933,7 +1138,6 @@
           state.stage = 'complete';
           saveData(data);
 
-          // Generate AI images if API key present
           if (getApiKey()) {
             generateImagesForItems(items, state.partyType, state.theme);
           }
@@ -1032,7 +1236,6 @@
 
       const state = data.plannerState;
       state.selectedScenes = Array.from(selected);
-      state.stage = 'generate';
       saveData(data);
 
       // Show user's selection as a message
@@ -1052,7 +1255,18 @@
       continueBtn.disabled = true;
       continueBtn.textContent = 'Generating recommendations...';
 
-      advancePlanner();
+      // Generate products from selected scenes
+      const items = generateProductsFromScenes(state);
+      data.moodBoardItems = items;
+      saveData(data);
+
+      if (isLLMMode() && state.pendingToolId) {
+        handleLLMSceneSelection(sceneNames, items);
+      } else {
+        state.stage = 'generate';
+        saveData(data);
+        advancePlanner();
+      }
     });
 
     btnContainer.appendChild(continueBtn);
@@ -1201,7 +1415,14 @@
     if (!text) return;
     chatInput.value = '';
     addChatMessage('user', text);
-    processUserInput(text);
+
+    if (isLLMMode() && data.plannerState && data.plannerState.apiMessages) {
+      data.plannerState.apiMessages.push({ role: 'user', content: text });
+      saveData(data);
+      sendToLLM();
+    } else {
+      processUserInput(text);
+    }
   }
 
   // ── Intent Detection ──
