@@ -57,6 +57,14 @@
     else localStorage.removeItem('partyplanner_anthropic_key');
   }
 
+  function getSelectedModel() {
+    return localStorage.getItem('partyplanner_model') || 'claude-opus-4-6';
+  }
+
+  function saveSelectedModel(model) {
+    localStorage.setItem('partyplanner_model', model);
+  }
+
   function isLLMMode() {
     return !!getAnthropicKey();
   }
@@ -65,10 +73,12 @@
   const settingsForm = document.getElementById('settings-form');
   const openaiKeyInput = document.getElementById('openai-key');
   const anthropicKeyInput = document.getElementById('anthropic-key');
+  const modelSelect = document.getElementById('model-select');
 
   settingsBtn.addEventListener('click', () => {
     openaiKeyInput.value = getApiKey();
     anthropicKeyInput.value = getAnthropicKey();
+    modelSelect.value = getSelectedModel();
     openModal('settings-modal');
   });
 
@@ -76,6 +86,7 @@
     e.preventDefault();
     saveApiKey(openaiKeyInput.value.trim());
     saveAnthropicKey(anthropicKeyInput.value.trim());
+    saveSelectedModel(modelSelect.value);
     closeModal('settings-modal');
   });
 
@@ -141,7 +152,7 @@
           'anthropic-dangerous-direct-browser-access': 'true',
         },
         body: JSON.stringify({
-          model: 'claude-opus-4-6',
+          model: getSelectedModel(),
           max_tokens: 1024,
           system: PLANNER_SYSTEM,
           tools: PLANNER_TOOLS,
