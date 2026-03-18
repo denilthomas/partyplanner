@@ -76,41 +76,67 @@
     'You help users plan events by gathering their preferences through natural conversation.',
     '',
     'Information to gather (naturally, not all at once):',
-    '1. Party type: birthday, wedding, babyshower, graduation, retirement, holiday, dinner, or anniversary',
-    '2. Theme or style (e.g. "rustic", "elegant", "fun and colorful")',
-    '3. Approximate guest count',
-    '4. Budget',
-    '5. DIY or with a coordinator',
+    '1. Party type and theme/style',
+    '2. Approximate guest count',
+    '3. Budget',
+    '4. DIY or with a coordinator',
     '',
     'Guidelines:',
     '- Keep responses concise: 1-3 sentences.',
     '- Be warm and enthusiastic.',
     '- React to what the user actually says. If they change their mind, acknowledge it naturally.',
     '- Do not repeat questions the user already answered.',
-    '- Once you know the party type and have had at least a brief exchange about preferences, call the show_inspiration tool.',
-    '- Do NOT wait until you have every detail — show inspiration early so the user can browse scenes.',
-    '- After the user selects scenes, the app auto-generates product recommendations. Summarize what was picked and encourage them to add items to their Party Bucket.',
-    '- Never make up product prices or availability.',
+    '- Once you know the party type/theme and at least one other detail, call the show_inspiration tool with 4-6 custom scene ideas tailored to what the user described.',
+    '- Generate scenes that are SPECIFIC to the user\'s theme — e.g. for a "Moana birthday" generate ocean/tropical scenes, not generic birthday scenes.',
+    '- Each scene must include 3-5 real products with realistic retail prices (as you\'d find on Amazon/Walmart/Target).',
+    '- After the user selects scenes, the app displays the products. Summarize the picks and encourage adding items to their Party Bucket.',
+    '- Product names should be specific and searchable (e.g. "Blue & Teal Balloon Garland Kit" not just "Balloons").',
+    '- Prices should reflect real retail prices for these items.',
   ].join('\n');
 
   const PLANNER_TOOLS = [
     {
       name: 'show_inspiration',
-      description: 'Display a grid of visual inspiration scenes for the user to browse and select. Call this when you have identified the party type and at least one preference. The user will tap scenes they love, and products will be auto-recommended.',
+      description: 'Generate and display inspiration scene cards tailored to this specific party. Create 4-6 scenes that match the user\'s theme and preferences. Each scene includes products the user can buy to recreate it.',
       input_schema: {
         type: 'object',
         properties: {
-          party_type: {
-            type: 'string',
-            enum: ['birthday', 'wedding', 'babyshower', 'graduation', 'retirement', 'holiday', 'dinner', 'anniversary'],
-            description: 'The type of party',
-          },
-          theme: { type: 'string', description: 'Theme or style, if known' },
+          party_type: { type: 'string', description: 'The type of party' },
+          theme: { type: 'string', description: 'Theme or style' },
           guest_count: { type: 'number', description: 'Expected guest count, if known' },
           budget: { type: 'number', description: 'Budget in dollars, if known' },
           is_diy: { type: 'boolean', description: 'Whether doing DIY, if known' },
+          scenes: {
+            type: 'array',
+            description: 'Inspiration scenes tailored to this party',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string', description: 'Short scene name (e.g. "Tropical Balloon Arch")' },
+                description: { type: 'string', description: '1-2 sentence description of the scene' },
+                image_prompt: { type: 'string', description: 'Detailed prompt for AI image generation of this scene' },
+                products: {
+                  type: 'array',
+                  description: '3-5 real purchasable products to recreate this scene',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      name: { type: 'string', description: 'Specific, searchable product name' },
+                      price: { type: 'number', description: 'Realistic retail price in USD' },
+                      category: {
+                        type: 'string',
+                        enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking'],
+                      },
+                    },
+                    required: ['name', 'price', 'category'],
+                  },
+                },
+              },
+              required: ['name', 'description', 'products'],
+            },
+          },
         },
-        required: ['party_type'],
+        required: ['party_type', 'scenes'],
       },
     },
   ];
@@ -122,7 +148,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'claude-sonnet-4-5-20250929',
-          max_tokens: 1024,
+          max_tokens: 4096,
           system: PLANNER_SYSTEM,
           tools: PLANNER_TOOLS,
           messages: apiMessages,
@@ -162,7 +188,7 @@
 
     if (!result || result.error) {
       const msg = result && result.error ? result.error : 'Could not reach the API.';
-      addAssistantMessage('Sorry, something went wrong: ' + msg + '\n\nPlease check your Anthropic API key in Settings.');
+      addAssistantMessage('Sorry, something went wrong: ' + msg + '\n\nPlease try again in a moment.');
       return;
     }
 
@@ -191,7 +217,25 @@
         state.stage = 'show-inspiration';
         state.pendingToolId = tool.id;
 
-        const scenes = inspirationScenes[state.partyType] || inspirationScenes.birthday;
+        // Use Claude-generated scenes, or fall back to hardcoded catalog
+        const scenes = (inp.scenes && inp.scenes.length > 0)
+          ? inp.scenes.map((s, i) => ({
+              id: 'ai-scene-' + i,
+              name: s.name,
+              description: s.description,
+              emoji: '',
+              imagePrompt: s.image_prompt || '',
+              products: (s.products || []).map(p => ({
+                name: p.name,
+                emoji: '',
+                price: p.price,
+                category: p.category,
+              })),
+            }))
+          : (inspirationScenes[state.partyType] || inspirationScenes.birthday);
+
+        // Store the scenes so product generation can use them
+        state.generatedScenes = scenes;
         addInspirationGrid(scenes);
       }
     }
@@ -1281,14 +1325,12 @@
   // ══════════════════════════════════════
 
   function generateProductsFromScenes(state) {
-    const scenes = inspirationScenes[state.partyType] || inspirationScenes.birthday;
+    // Use AI-generated scenes if available, otherwise fall back to hardcoded catalog
+    const scenes = state.generatedScenes || inspirationScenes[state.partyType] || inspirationScenes.birthday;
     const selectedIds = state.selectedScenes || [];
-    const guests = state.guestCount || 30;
-    const budget = state.budget || 500;
-    const theme = state.theme || '';
 
-    // Collect products from all selected scenes
-    const productMap = new Map(); // dedupe by name
+    // Collect products from all selected scenes, dedupe by name
+    const productMap = new Map();
     selectedIds.forEach(sceneId => {
       const scene = scenes.find(s => s.id === sceneId);
       if (!scene) return;
@@ -1299,30 +1341,8 @@
       });
     });
 
-    let products = Array.from(productMap.values());
-
-    // Apply theme adjective to product names
-    const themeAdj = extractThemeAdjective(theme);
-    if (themeAdj && themeAdj !== 'Classic') {
-      products = products.map(p => ({
-        ...p,
-        name: themeAdj + ' ' + p.name,
-      }));
-    }
-
-    // Scale quantities based on guest count
-    products = products.map(p => {
-      let name = p.name;
-      if (p.category === 'tableware' && !name.includes('Set of') && !name.includes('Pack of')) {
-        const qty = guests > 50 ? 'Set of 100' : guests > 20 ? 'Set of 50' : 'Set of 24';
-        name = name + ' ' + qty;
-      }
-      return { ...p, name };
-    });
-
-    // Use real catalog prices — no artificial scaling.
-    // Assign a retailer per item deterministically based on product name.
-    return products.map(p => {
+    // Assign a retailer per item deterministically based on product name
+    return Array.from(productMap.values()).map(p => {
       const storeIdx = Math.abs(hashString(p.name)) % storeNames.length;
       return {
         id: generateId(),
@@ -1341,14 +1361,6 @@
       hash |= 0;
     }
     return hash;
-  }
-
-  function extractThemeAdjective(theme) {
-    if (!theme) return 'Classic';
-    const cleaned = theme.replace(/theme|themed|style|styled|a |the |an /gi, '').trim();
-    if (cleaned.length > 40) return cleaned.substring(0, 40);
-    if (cleaned.length === 0) return 'Classic';
-    return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
   }
 
   // ── Background Image Generation ──
