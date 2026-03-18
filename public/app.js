@@ -72,71 +72,97 @@
   // ══════════════════════════════════════
 
   const PLANNER_SYSTEM = [
-    'You are a friendly, knowledgeable party planner AI assistant built into the PartyPlanner app.',
-    'You help users plan events by gathering their preferences through natural conversation.',
+    'You are a friendly, knowledgeable AI Party Planning Agent built into the PartyPlanner app.',
+    'You help users plan events by gathering their preferences through natural conversation, then building a personalized shopping list.',
     '',
     'Information to gather (naturally, not all at once):',
     '1. Party type and theme/style',
     '2. Approximate guest count',
-    '3. Budget',
-    '4. DIY or with a coordinator',
+    '3. Budget range',
     '',
-    'Guidelines:',
-    '- Keep responses concise: 1-3 sentences.',
-    '- Be warm and enthusiastic.',
-    '- React to what the user actually says. If they change their mind, acknowledge it naturally.',
-    '- Do not repeat questions the user already answered.',
-    '- Once you know the party type/theme and at least one other detail, call the show_inspiration tool with 4-6 custom scene ideas tailored to what the user described.',
-    '- Generate scenes that are SPECIFIC to the user\'s theme — e.g. for a "Moana birthday" generate ocean/tropical scenes, not generic birthday scenes.',
-    '- Each scene must include 3-5 real products with realistic retail prices (as you\'d find on Amazon/Walmart/Target).',
-    '- After the user selects scenes, the app displays the products. Summarize the picks and encourage adding items to their Party Bucket.',
-    '- Product names should be specific and searchable (e.g. "Blue & Teal Balloon Garland Kit" not just "Balloons").',
-    '- Prices should reflect real retail prices for these items.',
+    'IMAGE ANALYSIS — When the user uploads inspiration images:',
+    '- Analyze each image carefully using your vision capabilities',
+    '- Extract: color palette (list specific hex codes), theme/style keywords, decoration types visible, and estimated budget tier',
+    '- Use these insights to tailor your shopping list recommendations',
+    '- Reference specific elements you see in the images when making suggestions',
+    '',
+    'SHOPPING LIST — Once you have enough info (party type + at least one other detail, OR images uploaded):',
+    '- Call the show_shopping_list tool with 10-20 real, specific products',
+    '- Products should be actual items you\'d find on Amazon, Walmart, or Target',
+    '- Product names must be specific and searchable (e.g. "Blue & Teal Balloon Garland Kit 120pcs" not just "Balloons")',
+    '- Prices should reflect real retail prices for these items',
+    '- Include a mix of categories: decorations, tableware, entertainment, favors, etc.',
+    '- If user uploaded images, match the color palette and style you detected',
+    '',
+    'ONGOING CONVERSATION:',
+    '- After showing the shopping list, remain available to help',
+    '- If the user asks to add items, change quantities, or remove items, call update_party_bucket',
+    '- Keep responses concise: 1-3 sentences',
+    '- Be warm and enthusiastic',
+    '- React to what the user actually says. If they change their mind, acknowledge it naturally',
+    '- Do not repeat questions the user already answered',
   ].join('\n');
 
   const PLANNER_TOOLS = [
     {
-      name: 'show_inspiration',
-      description: 'Generate and display inspiration scene cards tailored to this specific party. Create 4-6 scenes that match the user\'s theme and preferences. Each scene includes products the user can buy to recreate it.',
+      name: 'show_shopping_list',
+      description: 'Display a shopping list of recommended products for the party. Call this once you know the party type/theme and at least one other detail, or when the user has uploaded inspiration images. Include 10-20 specific, real products with realistic prices.',
       input_schema: {
         type: 'object',
         properties: {
           party_type: { type: 'string', description: 'The type of party' },
           theme: { type: 'string', description: 'Theme or style' },
-          guest_count: { type: 'number', description: 'Expected guest count, if known' },
-          budget: { type: 'number', description: 'Budget in dollars, if known' },
-          is_diy: { type: 'boolean', description: 'Whether doing DIY, if known' },
-          scenes: {
+          color_palette: {
             type: 'array',
-            description: 'Inspiration scenes tailored to this party',
+            description: 'Hex color codes extracted from inspiration images or matching the theme',
+            items: { type: 'string' },
+          },
+          items: {
+            type: 'array',
+            description: '10-20 real products with realistic retail prices',
             items: {
               type: 'object',
               properties: {
-                name: { type: 'string', description: 'Short scene name (e.g. "Tropical Balloon Arch")' },
-                description: { type: 'string', description: '1-2 sentence description of the scene' },
-                image_prompt: { type: 'string', description: 'Detailed prompt for AI image generation of this scene' },
-                products: {
-                  type: 'array',
-                  description: '3-5 real purchasable products to recreate this scene',
-                  items: {
-                    type: 'object',
-                    properties: {
-                      name: { type: 'string', description: 'Specific, searchable product name' },
-                      price: { type: 'number', description: 'Realistic retail price in USD' },
-                      category: {
-                        type: 'string',
-                        enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking'],
-                      },
-                    },
-                    required: ['name', 'price', 'category'],
-                  },
+                name: { type: 'string', description: 'Specific, searchable product name (e.g. "Rose Gold Balloon Garland Kit 120pcs")' },
+                price: { type: 'number', description: 'Realistic retail price in USD' },
+                category: {
+                  type: 'string',
+                  enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking', 'lighting', 'florals'],
                 },
+                store: { type: 'string', enum: ['Amazon', 'Walmart', 'Target'], description: 'Which retailer carries this item' },
+                quantity: { type: 'number', description: 'Suggested quantity, default 1' },
               },
-              required: ['name', 'description', 'products'],
+              required: ['name', 'price', 'category', 'store'],
             },
           },
         },
-        required: ['party_type', 'scenes'],
+        required: ['party_type', 'items'],
+      },
+    },
+    {
+      name: 'update_party_bucket',
+      description: 'Add, remove, or update the quantity of items in the user\'s party bucket. Use this when the user asks to add more items, remove items, or change quantities.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          actions: {
+            type: 'array',
+            description: 'List of bucket modifications',
+            items: {
+              type: 'object',
+              properties: {
+                action: { type: 'string', enum: ['add', 'remove', 'update_quantity'], description: 'What to do' },
+                item_name: { type: 'string', description: 'Name of the item (for add: new product name, for remove/update: existing item name or close match)' },
+                price: { type: 'number', description: 'Price in USD (required for add)' },
+                store: { type: 'string', enum: ['Amazon', 'Walmart', 'Target'], description: 'Retailer (required for add)' },
+                category: { type: 'string', description: 'Category (required for add)' },
+                quantity: { type: 'number', description: 'New quantity (for update_quantity) or quantity to add (for add)' },
+              },
+              required: ['action', 'item_name'],
+            },
+          },
+        },
+        required: ['actions'],
       },
     },
   ];
@@ -147,7 +173,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          model: 'claude-sonnet-4-5-20250929',
+          model: 'claude-sonnet-4-5-20250514',
           max_tokens: 4096,
           system: PLANNER_SYSTEM,
           tools: PLANNER_TOOLS,
@@ -207,40 +233,272 @@
 
     // Handle tool calls
     for (const tool of toolUses) {
-      if (tool.name === 'show_inspiration') {
+      if (tool.name === 'show_shopping_list') {
         const inp = tool.input || {};
         if (inp.party_type) state.partyType = inp.party_type;
         if (inp.theme) state.theme = inp.theme;
-        if (inp.guest_count) state.guestCount = inp.guest_count;
-        if (inp.budget) state.budget = inp.budget;
-        if (inp.is_diy !== undefined) state.isDIY = inp.is_diy;
-        state.stage = 'show-inspiration';
-        state.pendingToolId = tool.id;
+        if (inp.color_palette) state.colorPalette = inp.color_palette;
 
-        // Use Claude-generated scenes, or fall back to hardcoded catalog
-        const scenes = (inp.scenes && inp.scenes.length > 0)
-          ? inp.scenes.map((s, i) => ({
-              id: 'ai-scene-' + i,
-              name: s.name,
-              description: s.description,
-              emoji: '',
-              imagePrompt: s.image_prompt || '',
-              products: (s.products || []).map(p => ({
-                name: p.name,
-                emoji: '',
-                price: p.price,
-                category: p.category,
-              })),
-            }))
-          : (inspirationScenes[state.partyType] || inspirationScenes.birthday);
+        const items = (inp.items || []).map(p => ({
+          id: generateId(),
+          name: p.name,
+          price: p.price,
+          category: p.category,
+          store: p.store || storeNames[Math.abs(hashString(p.name)) % storeNames.length],
+          quantity: p.quantity || 1,
+        }));
 
-        // Store the scenes so product generation can use them
-        state.generatedScenes = scenes;
-        addInspirationGrid(scenes);
+        data.moodBoardItems = items;
+        state.stage = 'complete';
+
+        // Show shopping list in chat
+        addShoppingListToChat(items, inp.color_palette);
+
+        // Send tool result back to Claude
+        state.apiMessages.push({
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: tool.id,
+            content: `Shopping list with ${items.length} items displayed. The user can now add items to their Party Bucket. Ask if they want to adjust anything.`,
+          }],
+        });
+
+        // Get Claude's follow-up
+        saveData(data);
+        await sendToLLMContinue();
+        return;
+      }
+
+      if (tool.name === 'update_party_bucket') {
+        const inp = tool.input || {};
+        const results = [];
+
+        for (const action of (inp.actions || [])) {
+          if (action.action === 'add') {
+            const newItem = {
+              id: generateId(),
+              name: action.item_name,
+              price: action.price || 0,
+              store: action.store || 'Amazon',
+              category: action.category || 'decorations',
+              quantity: action.quantity || 1,
+            };
+            data.partyBucket.push(newItem);
+            results.push(`Added "${action.item_name}" to bucket`);
+          } else if (action.action === 'remove') {
+            const idx = data.partyBucket.findIndex(b =>
+              b.name.toLowerCase().includes(action.item_name.toLowerCase()) ||
+              action.item_name.toLowerCase().includes(b.name.toLowerCase())
+            );
+            if (idx !== -1) {
+              results.push(`Removed "${data.partyBucket[idx].name}" from bucket`);
+              data.partyBucket.splice(idx, 1);
+            } else {
+              results.push(`Could not find "${action.item_name}" in bucket`);
+            }
+          } else if (action.action === 'update_quantity') {
+            const item = data.partyBucket.find(b =>
+              b.name.toLowerCase().includes(action.item_name.toLowerCase()) ||
+              action.item_name.toLowerCase().includes(b.name.toLowerCase())
+            );
+            if (item) {
+              item.quantity = action.quantity || 1;
+              results.push(`Updated "${item.name}" quantity to ${item.quantity}`);
+            } else {
+              results.push(`Could not find "${action.item_name}" in bucket`);
+            }
+          }
+        }
+
+        saveData(data);
+        updateBucketUI();
+        refreshMoodItemCards();
+
+        // Send tool result
+        state.apiMessages.push({
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: tool.id,
+            content: results.join('. ') + `. Bucket now has ${data.partyBucket.length} items, total: ${formatCurrency(getBucketTotal())}.`,
+          }],
+        });
+
+        saveData(data);
+        await sendToLLMContinue();
+        return;
       }
     }
 
     saveData(data);
+  }
+
+  // Continue LLM conversation after a tool result (no typing indicator needed since we already showed one)
+  async function sendToLLMContinue() {
+    const state = data.plannerState;
+    if (!state || !state.apiMessages) return;
+
+    const result = await callClaude(state.apiMessages);
+    if (result && !result.error && result.content) {
+      const texts = result.content.filter(b => b.type === 'text').map(b => b.text);
+      const toolUses = result.content.filter(b => b.type === 'tool_use');
+
+      state.apiMessages.push({ role: 'assistant', content: result.content });
+
+      if (texts.length > 0) {
+        addAssistantMessage(texts.join('\n'));
+      }
+
+      // Handle any further tool calls recursively
+      for (const tool of toolUses) {
+        if (tool.name === 'update_party_bucket') {
+          const inp = tool.input || {};
+          const results = [];
+          for (const action of (inp.actions || [])) {
+            if (action.action === 'add') {
+              data.partyBucket.push({
+                id: generateId(),
+                name: action.item_name,
+                price: action.price || 0,
+                store: action.store || 'Amazon',
+                category: action.category || 'decorations',
+                quantity: action.quantity || 1,
+              });
+              results.push(`Added "${action.item_name}"`);
+            } else if (action.action === 'remove') {
+              const idx = data.partyBucket.findIndex(b =>
+                b.name.toLowerCase().includes(action.item_name.toLowerCase())
+              );
+              if (idx !== -1) {
+                results.push(`Removed "${data.partyBucket[idx].name}"`);
+                data.partyBucket.splice(idx, 1);
+              }
+            } else if (action.action === 'update_quantity') {
+              const item = data.partyBucket.find(b =>
+                b.name.toLowerCase().includes(action.item_name.toLowerCase())
+              );
+              if (item) {
+                item.quantity = action.quantity || 1;
+                results.push(`Updated "${item.name}" qty to ${item.quantity}`);
+              }
+            }
+          }
+          saveData(data);
+          updateBucketUI();
+
+          state.apiMessages.push({
+            role: 'user',
+            content: [{
+              type: 'tool_result',
+              tool_use_id: tool.id,
+              content: results.join('. ') + `. Bucket: ${data.partyBucket.length} items, ${formatCurrency(getBucketTotal())}.`,
+            }],
+          });
+          saveData(data);
+          await sendToLLMContinue();
+          return;
+        }
+      }
+
+      saveData(data);
+    }
+  }
+
+  function getBucketTotal() {
+    return data.partyBucket.reduce((s, item) => s + (item.price * (item.quantity || 1)), 0);
+  }
+
+  // Display shopping list products in the chat
+  function addShoppingListToChat(items, colorPalette) {
+    const msg = document.createElement('div');
+    msg.className = 'chat-message assistant';
+    msg.style.maxWidth = '100%';
+
+    // Show color palette if available
+    if (colorPalette && colorPalette.length > 0) {
+      const paletteDiv = document.createElement('div');
+      paletteDiv.className = 'color-palette-bar';
+      colorPalette.forEach(hex => {
+        const swatch = document.createElement('div');
+        swatch.className = 'color-swatch';
+        swatch.style.background = hex;
+        swatch.title = hex;
+        paletteDiv.appendChild(swatch);
+      });
+      msg.appendChild(paletteDiv);
+    }
+
+    const grid = document.createElement('div');
+    grid.className = 'chat-mood-grid';
+
+    items.forEach(item => {
+      grid.appendChild(createMoodItemCard(item));
+    });
+
+    msg.appendChild(grid);
+    chatMessages.appendChild(msg);
+    scrollChatToBottom();
+  }
+
+  // ── Chat Image Upload Handling ──
+
+  let pendingChatImages = []; // Array of { dataUrl, base64, mediaType }
+
+  const chatUploadBtn = document.getElementById('chat-upload-btn');
+  const chatUploadInput = document.getElementById('chat-upload-input');
+  const chatImagePreview = document.getElementById('chat-image-preview');
+
+  chatUploadBtn.addEventListener('click', () => {
+    chatUploadInput.click();
+  });
+
+  chatUploadInput.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files);
+    if (files.length === 0) return;
+
+    for (const file of files) {
+      if (!file.type.startsWith('image/')) continue;
+      if (pendingChatImages.length >= 10) break;
+
+      const compressed = await compressImage(file, 800, 0.8);
+      // Extract base64 and media type from data URL
+      const match = compressed.match(/^data:(image\/[^;]+);base64,(.+)$/);
+      if (!match) continue;
+
+      pendingChatImages.push({
+        dataUrl: compressed,
+        base64: match[2],
+        mediaType: match[1],
+      });
+    }
+
+    chatUploadInput.value = '';
+    renderChatImagePreview();
+  });
+
+  function renderChatImagePreview() {
+    if (pendingChatImages.length === 0) {
+      chatImagePreview.classList.add('hidden');
+      chatImagePreview.innerHTML = '';
+      return;
+    }
+
+    chatImagePreview.classList.remove('hidden');
+    chatImagePreview.innerHTML = pendingChatImages.map((img, i) => `
+      <div class="chat-preview-thumb">
+        <img src="${img.dataUrl}" alt="Upload ${i + 1}">
+        <button class="chat-preview-remove" data-idx="${i}">&times;</button>
+      </div>
+    `).join('') + `<span class="chat-preview-count">${pendingChatImages.length}/10 images</span>`;
+
+    chatImagePreview.querySelectorAll('.chat-preview-remove').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const idx = parseInt(btn.dataset.idx, 10);
+        pendingChatImages.splice(idx, 1);
+        renderChatImagePreview();
+      });
+    });
   }
 
   // After the user selects scenes in LLM mode, send the tool result and show products.
@@ -983,6 +1241,8 @@
     stationery:  { gradient: 'linear-gradient(135deg, #fff1c1, #f7c948)', label: 'Stationery' },
     accessories: { gradient: 'linear-gradient(135deg, #667eea, #764ba2)', label: 'Accessories' },
     baking:      { gradient: 'linear-gradient(135deg, #f6d365, #fda085)', label: 'Baking' },
+    lighting:    { gradient: 'linear-gradient(135deg, #ffecd2, #fcb69f)', label: 'Lighting' },
+    florals:     { gradient: 'linear-gradient(135deg, #f5c6ec, #fce4ec)', label: 'Florals' },
   };
 
   function getCategoryStyle(category) {
@@ -1404,17 +1664,81 @@
 
   function handleChatSend() {
     const text = chatInput.value.trim();
-    if (!text) return;
+    const hasImages = pendingChatImages.length > 0;
+    if (!text && !hasImages) return;
     chatInput.value = '';
-    addChatMessage('user', text);
+
+    // Show user message with image thumbnails if any
+    if (hasImages) {
+      addChatMessageWithImages(text, pendingChatImages);
+    } else {
+      addChatMessage('user', text);
+    }
 
     if (isLLMMode() && data.plannerState && data.plannerState.apiMessages) {
-      data.plannerState.apiMessages.push({ role: 'user', content: text });
+      // Build content blocks: images first, then text
+      const contentBlocks = [];
+
+      for (const img of pendingChatImages) {
+        contentBlocks.push({
+          type: 'image',
+          source: {
+            type: 'base64',
+            media_type: img.mediaType,
+            data: img.base64,
+          },
+        });
+      }
+
+      if (text) {
+        contentBlocks.push({ type: 'text', text: text });
+      } else if (hasImages) {
+        contentBlocks.push({ type: 'text', text: `I've uploaded ${pendingChatImages.length} inspiration image(s). Please analyze them and help me plan my party based on what you see.` });
+      }
+
+      data.plannerState.apiMessages.push({ role: 'user', content: contentBlocks });
+
+      // Clear pending images
+      pendingChatImages = [];
+      renderChatImagePreview();
+
       saveData(data);
       sendToLLM();
     } else {
+      pendingChatImages = [];
+      renderChatImagePreview();
       processUserInput(text);
     }
+  }
+
+  function addChatMessageWithImages(text, images) {
+    data.chatHistory.push({ role: 'user', text: text || `[${images.length} image(s) uploaded]` });
+    saveData(data);
+
+    const msg = document.createElement('div');
+    msg.className = 'chat-message user';
+
+    if (images.length > 0) {
+      const thumbsDiv = document.createElement('div');
+      thumbsDiv.className = 'chat-msg-thumbs';
+      images.forEach(img => {
+        const thumb = document.createElement('img');
+        thumb.src = img.dataUrl;
+        thumb.className = 'chat-msg-thumb';
+        thumb.alt = 'Uploaded image';
+        thumbsDiv.appendChild(thumb);
+      });
+      msg.appendChild(thumbsDiv);
+    }
+
+    if (text) {
+      const textEl = document.createElement('div');
+      textEl.innerHTML = escapeHtml(text).replace(/\n/g, '<br>');
+      msg.appendChild(textEl);
+    }
+
+    chatMessages.appendChild(msg);
+    scrollChatToBottom();
   }
 
   // ── Intent Detection ──
@@ -1885,7 +2209,7 @@
     if (isInBucket(item.id)) {
       data.partyBucket = data.partyBucket.filter(b => b.id !== item.id);
     } else {
-      data.partyBucket.push({ ...item });
+      data.partyBucket.push({ ...item, quantity: item.quantity || 1 });
     }
     saveData(data);
     updateBucketUI();
@@ -1904,7 +2228,7 @@
     document.getElementById('bucket-count-header').textContent = count;
 
     const bucketItemsEl = document.getElementById('bucket-items');
-    const total = data.partyBucket.reduce((s, item) => s + item.price, 0);
+    const total = getBucketTotal();
     document.getElementById('bucket-total-price').textContent = formatCurrency(total);
 
     // Update checkout button
@@ -1915,23 +2239,43 @@
     }
 
     if (count === 0) {
-      bucketItemsEl.innerHTML = '<div class="bucket-empty">Your party bucket is empty. Add items from the mood board!</div>';
+      bucketItemsEl.innerHTML = '<div class="bucket-empty">Your party bucket is empty. Add items from the shopping list!</div>';
       return;
     }
 
     bucketItemsEl.innerHTML = data.partyBucket.map(item => {
       const catStyle = getCategoryStyle(item.category);
+      const qty = item.quantity || 1;
+      const lineTotal = item.price * qty;
       return `
         <div class="bucket-item">
           <div class="bucket-item-swatch" style="background: ${catStyle.gradient}"></div>
           <div class="bucket-item-info">
             <span class="bucket-item-name">${escapeHtml(item.name)}</span>
-            <span class="bucket-item-price">${formatCurrency(item.price)} <span class="bucket-item-store-tag">via ${escapeHtml(item.store)}</span></span>
+            <span class="bucket-item-price">${formatCurrency(lineTotal)} <span class="bucket-item-store-tag">via ${escapeHtml(item.store)}</span></span>
+            <div class="bucket-qty-controls">
+              <button class="bucket-qty-btn" onclick="app.changeQuantity('${item.id}', -1)">-</button>
+              <span class="bucket-qty-value">${qty}</span>
+              <button class="bucket-qty-btn" onclick="app.changeQuantity('${item.id}', 1)">+</button>
+            </div>
           </div>
           <button class="bucket-item-remove" onclick="app.removeBucketItem('${item.id}')">&times;</button>
         </div>
       `;
     }).join('');
+  }
+
+  function changeQuantity(itemId, delta) {
+    const item = data.partyBucket.find(b => b.id === itemId);
+    if (!item) return;
+    const newQty = (item.quantity || 1) + delta;
+    if (newQty < 1) {
+      removeBucketItem(itemId);
+      return;
+    }
+    item.quantity = newQty;
+    saveData(data);
+    updateBucketUI();
   }
 
   // ── Unified Checkout ──
@@ -1976,7 +2320,7 @@
           <h4>Order Placed!</h4>
           <p>Your party supplies are on the way to <strong>${escapeHtml(formData.name)}</strong>.</p>
           <p class="checkout-success-detail">Confirmation sent to <strong>${escapeHtml(formData.email)}</strong></p>
-          <p class="checkout-success-detail">${data.partyBucket.length} items — ${formatCurrency(data.partyBucket.reduce((s, i) => s + i.price, 0))}</p>
+          <p class="checkout-success-detail">${data.partyBucket.length} items — ${formatCurrency(getBucketTotal())}</p>
           <button class="btn btn-primary" id="checkout-done-btn">Done</button>
         </div>
       `;
@@ -1996,15 +2340,17 @@
   function renderCheckoutSummary() {
     const el = document.getElementById('checkout-summary');
     if (!el) return;
-    const total = data.partyBucket.reduce((s, item) => s + item.price, 0);
+    const total = getBucketTotal();
     el.innerHTML = `
       <div class="checkout-summary-items">
-        ${data.partyBucket.map(item => `
+        ${data.partyBucket.map(item => {
+          const qty = item.quantity || 1;
+          return `
           <div class="checkout-line-item">
-            <span>${escapeHtml(item.name)}</span>
-            <span>${formatCurrency(item.price)}</span>
+            <span>${escapeHtml(item.name)}${qty > 1 ? ` x${qty}` : ''}</span>
+            <span>${formatCurrency(item.price * qty)}</span>
           </div>
-        `).join('')}
+        `}).join('')}
       </div>
       <div class="checkout-summary-total">
         <strong>Total</strong>
@@ -2399,6 +2745,7 @@
     editExpense,
     deleteExpense,
     removeBucketItem,
+    changeQuantity,
     toggleMoodBoardItem,
     deleteUploadedImage,
   };

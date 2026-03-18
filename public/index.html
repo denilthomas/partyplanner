@@ -49,8 +49,8 @@
       <!-- Landing State -->
       <div id="planner-landing" class="planner-landing">
         <div class="planner-hero">
-          <h2>What party do you want to plan?</h2>
-          <p class="planner-subtitle">Describe your dream event and our AI planner will help you bring it to life</p>
+          <h2>AI Party Planning Agent</h2>
+          <p class="planner-subtitle">Describe your dream event, upload inspiration images, and our AI agent will build a personalized shopping list</p>
         </div>
         <div class="planner-prompt-container">
           <div class="prompt-input-wrap">
@@ -106,8 +106,13 @@
         </div>
         <div id="chat-messages" class="chat-messages"></div>
         <div class="chat-input-container">
-          <textarea id="chat-input" class="chat-input" rows="1" placeholder="Type your response..."></textarea>
-          <button id="chat-send-btn" class="btn btn-primary chat-send-btn">Send</button>
+          <div id="chat-image-preview" class="chat-image-preview hidden"></div>
+          <div class="chat-input-row">
+            <button id="chat-upload-btn" class="btn btn-secondary chat-upload-btn" title="Upload inspiration images">&#x1F4CE;</button>
+            <input type="file" id="chat-upload-input" accept="image/*" multiple style="display:none">
+            <textarea id="chat-input" class="chat-input" rows="1" placeholder="Type your response or upload inspiration images..."></textarea>
+            <button id="chat-send-btn" class="btn btn-primary chat-send-btn">Send</button>
+          </div>
         </div>
       </div>
 

@@ -634,14 +634,6 @@ main {
 
 /* ── Chat Input ── */
 
-.chat-input-container {
-  display: flex;
-  gap: 0.5rem;
-  padding: 0.75rem 1rem;
-  border-top: 1px solid var(--border);
-  background: var(--surface);
-}
-
 .chat-input {
   flex: 1;
   border: 2px solid var(--border);
@@ -1612,6 +1604,156 @@ footer {
 
 .checkout-success .btn {
   margin-top: 1.5rem;
+}
+
+/* ── Chat Image Upload ── */
+
+.chat-input-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 0.75rem 1rem;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.chat-upload-btn {
+  padding: 0.5rem 0.6rem;
+  font-size: 1.1rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.chat-image-preview {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.chat-preview-thumb {
+  position: relative;
+  width: 60px;
+  height: 60px;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid var(--border);
+}
+
+.chat-preview-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.chat-preview-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: rgba(0,0,0,0.6);
+  color: white;
+  border: none;
+  font-size: 0.7rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+.chat-preview-count {
+  font-size: 0.75rem;
+  color: var(--text-light);
+  font-weight: 600;
+}
+
+/* ── User Message Image Thumbnails ── */
+
+.chat-msg-thumbs {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.chat-msg-thumb {
+  width: 80px;
+  height: 80px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 2px solid rgba(255,255,255,0.3);
+}
+
+/* ── Color Palette Bar ── */
+
+.color-palette-bar {
+  display: flex;
+  gap: 0.4rem;
+  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.color-swatch {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 2px solid rgba(0,0,0,0.1);
+  cursor: default;
+  transition: transform 0.15s;
+}
+
+.color-swatch:hover {
+  transform: scale(1.15);
+}
+
+/* ── Bucket Quantity Controls ── */
+
+.bucket-qty-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.3rem;
+}
+
+.bucket-qty-btn {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: 1.5px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.85rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s;
+  padding: 0;
+}
+
+.bucket-qty-btn:hover {
+  border-color: var(--primary);
+  background: rgba(108, 92, 231, 0.08);
+  color: var(--primary);
+}
+
+.bucket-qty-value {
+  font-size: 0.85rem;
+  font-weight: 700;
+  min-width: 20px;
+  text-align: center;
 }
 
 /* ── Utility ── */
