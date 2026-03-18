@@ -2,10 +2,13 @@
   "name": "partyplanner",
   "version": "1.0.0",
   "description": "A party planning application to organize events, manage guests, and track budgets",
-  "main": "index.html",
+  "main": "server.js",
   "scripts": {
-    "start": "npx serve .",
+    "start": "node server.js",
     "test": "echo \"Tests passed\""
+  },
+  "dependencies": {
+    "express": "^4.21.0"
   },
   "keywords": ["party", "planner", "events"],
   "license": "MIT"

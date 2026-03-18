@@ -48,34 +48,22 @@
     else localStorage.removeItem('partyplanner_openai_key');
   }
 
-  function getAnthropicKey() {
-    return localStorage.getItem('partyplanner_anthropic_key') || '';
-  }
-
-  function saveAnthropicKey(key) {
-    if (key) localStorage.setItem('partyplanner_anthropic_key', key);
-    else localStorage.removeItem('partyplanner_anthropic_key');
-  }
-
   function isLLMMode() {
-    return !!getAnthropicKey();
+    return true; // Always use LLM — backend holds the API key
   }
 
   const settingsBtn = document.getElementById('settings-btn');
   const settingsForm = document.getElementById('settings-form');
   const openaiKeyInput = document.getElementById('openai-key');
-  const anthropicKeyInput = document.getElementById('anthropic-key');
 
   settingsBtn.addEventListener('click', () => {
     openaiKeyInput.value = getApiKey();
-    anthropicKeyInput.value = getAnthropicKey();
     openModal('settings-modal');
   });
 
   settingsForm.addEventListener('submit', (e) => {
     e.preventDefault();
     saveApiKey(openaiKeyInput.value.trim());
-    saveAnthropicKey(anthropicKeyInput.value.trim());
     closeModal('settings-modal');
   });
 
@@ -128,18 +116,10 @@
   ];
 
   async function callClaude(apiMessages) {
-    const apiKey = getAnthropicKey();
-    if (!apiKey) return null;
-
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
+      const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           model: 'claude-sonnet-4-5-20250929',
           max_tokens: 1024,
@@ -151,13 +131,13 @@
 
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        console.error('Claude API error:', err);
-        return { error: (err.error && err.error.message) || 'API request failed' };
+        console.error('Chat API error:', err);
+        return { error: (err.error && err.error.message) || err.error || 'API request failed' };
       }
 
       return await res.json();
     } catch (err) {
-      console.error('Claude API request failed:', err);
+      console.error('Chat API request failed:', err);
       return { error: err.message || 'Network error' };
     }
   }
