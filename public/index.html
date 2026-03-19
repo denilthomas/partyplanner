@@ -36,15 +36,8 @@
     </div>
   </div>
 
-  <nav>
-    <button class="nav-btn active" data-tab="planner">DIY AI Planner</button>
-    <button class="nav-btn" data-tab="guests">Guest List &amp; RSVP</button>
-    <button class="nav-btn" data-tab="budget">Budget Tracker</button>
-    <button class="nav-btn" data-tab="moodboard">Mood Board</button>
-  </nav>
-
   <main>
-    <!-- DIY AI Planner Tab -->
+    <!-- AI Party Planner (full-page, no tabs) -->
     <section id="planner" class="tab-content active">
       <!-- Landing State -->
       <div id="planner-landing" class="planner-landing">
@@ -167,136 +160,6 @@
           </form>
         </div>
       </div>
-    </section>
-
-    <!-- Guest List & RSVP Tab -->
-    <section id="guests" class="tab-content">
-      <h2>Guest List &amp; RSVP Tracker</h2>
-      <div class="guest-controls">
-        <button class="btn btn-primary" id="add-guest-btn">+ Add Guest</button>
-      </div>
-      <div id="guest-summary" class="guest-summary hidden">
-        <span class="badge badge-confirmed" id="confirmed-count">0 Confirmed</span>
-        <span class="badge badge-pending" id="pending-count">0 Pending</span>
-        <span class="badge badge-declined" id="declined-count">0 Declined</span>
-        <span class="badge badge-total" id="total-people-count">0 Total People</span>
-      </div>
-      <div id="guests-list" class="guests-table-container"></div>
-
-      <!-- Guest Form Modal -->
-      <div id="guest-modal" class="modal hidden">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h3 id="guest-modal-title">Add Guest</h3>
-            <button class="modal-close" data-modal="guest-modal">&times;</button>
-          </div>
-          <form id="guest-form">
-            <input type="hidden" id="guest-id">
-            <div class="form-group">
-              <label for="guest-name">Name</label>
-              <input type="text" id="guest-name" required placeholder="Full name">
-            </div>
-            <div class="form-group">
-              <label for="guest-email">Email</label>
-              <input type="email" id="guest-email" placeholder="email@example.com">
-            </div>
-            <div class="form-group">
-              <label for="guest-num-people">Number of People</label>
-              <input type="number" id="guest-num-people" min="1" value="1" required placeholder="1">
-            </div>
-            <div class="form-group">
-              <label for="guest-rsvp">RSVP</label>
-              <select id="guest-rsvp">
-                <option value="pending">Pending</option>
-                <option value="yes">Yes</option>
-                <option value="no">No</option>
-              </select>
-            </div>
-            <div class="form-actions">
-              <button type="button" class="btn btn-secondary" data-modal="guest-modal">Cancel</button>
-              <button type="submit" class="btn btn-primary">Save Guest</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    </section>
-
-    <!-- Budget Tracker Tab -->
-    <section id="budget" class="tab-content">
-      <h2>Budget Tracker</h2>
-      <div class="budget-controls">
-        <div class="budget-set">
-          <label for="budget-limit">Total Budget: $</label>
-          <input type="number" id="budget-limit" min="0" step="1" placeholder="0" value="0">
-          <button class="btn btn-secondary btn-sm" id="set-budget-btn">Set</button>
-        </div>
-        <button class="btn btn-primary" id="add-expense-btn">+ Add Expense</button>
-      </div>
-      <div id="budget-overview" class="budget-overview">
-        <div class="budget-bar-container">
-          <div class="budget-bar" id="budget-bar"></div>
-        </div>
-        <div class="budget-stats">
-          <span>Spent: <strong id="budget-spent">$0.00</strong></span>
-          <span>Remaining: <strong id="budget-remaining">$0.00</strong></span>
-          <span>Budget: <strong id="budget-total-display">$0.00</strong></span>
-        </div>
-      </div>
-      <div id="expenses-list" class="cards-grid"></div>
-
-      <!-- Expense Form Modal -->
-      <div id="expense-modal" class="modal hidden">
-        <div class="modal-content">
-          <div class="modal-header">
-            <h3 id="expense-modal-title">Add Expense</h3>
-            <button class="modal-close" data-modal="expense-modal">&times;</button>
-          </div>
-          <form id="expense-form">
-            <input type="hidden" id="expense-id">
-            <div class="form-group">
-              <label for="expense-category">Category</label>
-              <select id="expense-category">
-                <option value="venue">Venue</option>
-                <option value="food">Food & Drinks</option>
-                <option value="decorations">Decorations</option>
-                <option value="entertainment">Entertainment</option>
-                <option value="photography">Photography</option>
-                <option value="invitations">Invitations</option>
-                <option value="supplies">Party Supplies</option>
-                <option value="other">Other</option>
-              </select>
-            </div>
-            <div class="form-group">
-              <label for="expense-description">Description</label>
-              <input type="text" id="expense-description" required placeholder="e.g., Themed paper cups set of 100">
-            </div>
-            <div class="form-group">
-              <label for="expense-amount">Amount ($)</label>
-              <input type="number" id="expense-amount" required min="0" step="0.01" placeholder="0.00">
-            </div>
-            <div class="form-group">
-              <label for="expense-paid">
-                <input type="checkbox" id="expense-paid"> Paid
-              </label>
-            </div>
-            <div class="form-actions">
-              <button type="button" class="btn btn-secondary" data-modal="expense-modal">Cancel</button>
-              <button type="submit" class="btn btn-primary">Save Expense</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    </section>
-
-    <!-- Mood Board Tab -->
-    <section id="moodboard" class="tab-content">
-      <h2>Mood Board</h2>
-      <p class="moodboard-subtitle">Your saved inspiration and uploaded images. Add items to your Party Bucket or upload your own.</p>
-      <div class="moodboard-controls">
-        <button class="btn btn-primary" id="upload-image-btn">+ Upload Image</button>
-        <input type="file" id="upload-image-input" accept="image/*" multiple style="display:none">
-      </div>
-      <div id="moodboard-grid" class="moodboard-grid"></div>
     </section>
   </main>
 
