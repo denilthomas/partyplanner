@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PartyPlanner — Architecture Diagram</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            background: #0a0a0f;
+            color: #e0e0e0;
+            font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .header {
+            text-align: center;
+            padding: 40px 20px 20px;
+        }
+
+        .header h1 {
+            font-size: 2rem;
+            font-weight: 300;
+            letter-spacing: 2px;
+            color: #fff;
+        }
+
+        .header h1 span {
+            background: linear-gradient(135deg, #a78bfa, #f472b6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 700;
+        }
+
+        .header p {
+            color: #888;
+            margin-top: 8px;
+            font-size: 0.95rem;
+        }
+
+        /* ── Canvas ── */
+        .canvas {
+            max-width: 1200px;
+            margin: 30px auto;
+            padding: 0 20px 60px;
+            position: relative;
+        }
+
+        /* ── Flow Phases ── */
+        .phase {
+            position: relative;
+            margin-bottom: 16px;
+        }
+
+        .phase-label {
+            font-size: 0.7rem;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            color: #555;
+            margin-bottom: 12px;
+            padding-left: 4px;
+        }
+
+        /* ── Nodes ── */
+        .node {
+            border-radius: 16px;
+            padding: 24px 28px;
+            position: relative;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .node:hover {
+            transform: translateY(-2px);
+        }
+
+        .node-title {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .node-desc {
+            font-size: 0.82rem;
+            color: #aaa;
+            line-height: 1.5;
+        }
+
+        .badge {
+            font-size: 0.6rem;
+            padding: 2px 8px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+        }
+
+        /* ── Color Themes ── */
+        .node-user {
+            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            border: 1px solid #2a2a4a;
+        }
+        .node-user .node-title { color: #93c5fd; }
+        .node-user .badge { background: #1e3a5f; color: #93c5fd; }
+
+        .node-orchestrator {
+            background: linear-gradient(135deg, #1a1028, #231536);
+            border: 1px solid #3a2a5a;
+        }
+        .node-orchestrator .node-title { color: #c4b5fd; }
+        .node-orchestrator .badge { background: #2d1f5e; color: #c4b5fd; }
+
+        .node-pinterest {
+            background: linear-gradient(135deg, #2a1215, #3a1820);
+            border: 1px solid #5a2a30;
+        }
+        .node-pinterest .node-title { color: #fca5a5; }
+        .node-pinterest .badge { background: #5a1a20; color: #fca5a5; }
+
+        .node-vision {
+            background: linear-gradient(135deg, #1a2415, #1d3018);
+            border: 1px solid #2a4a25;
+        }
+        .node-vision .node-title { color: #86efac; }
+        .node-vision .badge { background: #1a3a15; color: #86efac; }
+
+        .node-ecommerce {
+            background: linear-gradient(135deg, #2a2210, #352a12);
+            border: 1px solid #4a3a1a;
+        }
+        .node-ecommerce .node-title { color: #fcd34d; }
+        .node-ecommerce .badge { background: #4a3a10; color: #fcd34d; }
+
+        .node-bucket {
+            background: linear-gradient(135deg, #1a1528, #251a35);
+            border: 1px solid #4a2a6a;
+            border-width: 2px;
+        }
+        .node-bucket .node-title { color: #e9d5ff; }
+        .node-bucket .badge { background: #3a1a5a; color: #e9d5ff; }
+
+        /* ── Arrows ── */
+        .arrow-container {
+            display: flex;
+            justify-content: center;
+            padding: 6px 0;
+            position: relative;
+        }
+
+        .arrow {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0;
+        }
+
+        .arrow-line {
+            width: 2px;
+            height: 28px;
+            background: linear-gradient(to bottom, #444, #666);
+        }
+
+        .arrow-head {
+            width: 0;
+            height: 0;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-top: 8px solid #666;
+        }
+
+        .arrow-label {
+            font-size: 0.68rem;
+            color: #777;
+            background: #0a0a0f;
+            padding: 2px 10px;
+            border-radius: 10px;
+            border: 1px solid #222;
+            margin-top: -2px;
+            white-space: nowrap;
+        }
+
+        /* ── Feedback Loop ── */
+        .feedback-loop {
+            position: absolute;
+            right: -40px;
+            top: 0;
+            bottom: 0;
+            width: 40px;
+            display: flex;
+            align-items: center;
+        }
+
+        .loop-track {
+            position: absolute;
+            right: 0;
+            top: 10%;
+            bottom: 10%;
+            width: 30px;
+            border: 2px solid #4a2a6a;
+            border-left: none;
+            border-radius: 0 16px 16px 0;
+            opacity: 0.5;
+        }
+
+        .loop-label {
+            position: absolute;
+            right: -8px;
+            top: 50%;
+            transform: translateY(-50%) rotate(90deg);
+            font-size: 0.6rem;
+            color: #8b5cf6;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            white-space: nowrap;
+            opacity: 0.7;
+        }
+
+        /* ── Split Layout ── */
+        .split-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 12px;
+        }
+
+        /* ── MCP Tool Tag ── */
+        .tool-tag {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            font-size: 0.65rem;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            padding: 3px 8px;
+            border-radius: 6px;
+            margin-top: 10px;
+            color: #888;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        .tool-tag::before {
+            content: "⚡";
+            font-size: 0.7rem;
+        }
+
+        /* ── Data Flow Sidebar ── */
+        .data-sidebar {
+            max-width: 1200px;
+            margin: 0 auto 40px;
+            padding: 0 20px;
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 16px;
+        }
+
+        .data-card {
+            background: #111118;
+            border: 1px solid #1a1a2a;
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .data-card h3 {
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #666;
+            margin-bottom: 12px;
+        }
+
+        .data-item {
+            font-size: 0.8rem;
+            color: #999;
+            padding: 4px 0;
+            border-bottom: 1px solid #1a1a1a;
+            font-family: 'SF Mono', 'Fira Code', monospace;
+        }
+
+        .data-item:last-child { border-bottom: none; }
+
+        .data-item span {
+            color: #c4b5fd;
+        }
+
+        /* ── Legend ── */
+        .legend {
+            max-width: 1200px;
+            margin: 0 auto 40px;
+            padding: 0 20px;
+            display: flex;
+            gap: 24px;
+            flex-wrap: wrap;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.75rem;
+            color: #666;
+        }
+
+        .legend-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        /* ── Refinement Section ── */
+        .refinement-wrapper {
+            position: relative;
+            border: 1px dashed #3a2a5a;
+            border-radius: 20px;
+            padding: 20px 16px 16px;
+            margin-bottom: 16px;
+        }
+
+        .refinement-label {
+            position: absolute;
+            top: -10px;
+            left: 24px;
+            background: #0a0a0f;
+            padding: 0 12px;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #8b5cf6;
+        }
+
+        .refinement-arrow {
+            position: absolute;
+            right: 20px;
+            top: -10px;
+            background: #0a0a0f;
+            padding: 0 8px;
+            font-size: 0.65rem;
+            color: #8b5cf6;
+        }
+
+        /* ── Responsive ── */
+        @media (max-width: 768px) {
+            .split-row { grid-template-columns: 1fr; }
+            .data-sidebar { grid-template-columns: 1fr; }
+            .header h1 { font-size: 1.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h1>Party<span>Planner</span> Architecture</h1>
+        <p>MCP-Powered Agent Pipeline &mdash; From Inspiration to Shopping Cart</p>
+    </div>
+
+    <!-- Legend -->
+    <div class="legend">
+        <div class="legend-item">
+            <div class="legend-dot" style="background: #93c5fd;"></div>
+            User Interaction
+        </div>
+        <div class="legend-item">
+            <div class="legend-dot" style="background: #c4b5fd;"></div>
+            Claude Orchestrator
+        </div>
+        <div class="legend-item">
+            <div class="legend-dot" style="background: #fca5a5;"></div>
+            Pinterest Scraper (MCP)
+        </div>
+        <div class="legend-item">
+            <div class="legend-dot" style="background: #86efac;"></div>
+            Vision Extraction (Claude)
+        </div>
+        <div class="legend-item">
+            <div class="legend-dot" style="background: #fcd34d;"></div>
+            E-Commerce Scraper (MCP)
+        </div>
+        <div class="legend-item">
+            <div class="legend-dot" style="background: #e9d5ff;"></div>
+            Party Bucket (Output)
+        </div>
+    </div>
+
+    <div class="canvas">
+
+        <!-- Phase 1: User Input -->
+        <div class="phase">
+            <div class="phase-label">Phase 1 &mdash; Intent</div>
+            <div class="node node-user">
+                <div class="node-title">
+                    User Input
+                    <span class="badge">Frontend</span>
+                </div>
+                <div class="node-desc">
+                    User describes their party vision in natural language.<br>
+                    <em>"I want a bohemian garden tea party for 20 guests with a $500 budget"</em>
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow-container">
+            <div class="arrow">
+                <div class="arrow-line"></div>
+                <div class="arrow-head"></div>
+                <div class="arrow-label">prompt + context</div>
+            </div>
+        </div>
+
+        <!-- Phase 2: Orchestrator -->
+        <div class="phase">
+            <div class="phase-label">Phase 2 &mdash; Orchestration</div>
+            <div class="node node-orchestrator">
+                <div class="node-title">
+                    Claude Orchestrator
+                    <span class="badge">Agent</span>
+                </div>
+                <div class="node-desc">
+                    Central brain that coordinates the full pipeline. Interprets user intent,
+                    generates search queries, manages the refinement loop, and assembles
+                    the final party bucket. Calls MCP tools as needed.
+                </div>
+                <div class="tool-tag">claude-3.5-sonnet / opus &middot; vision-capable</div>
+            </div>
+        </div>
+
+        <div class="arrow-container">
+            <div class="arrow">
+                <div class="arrow-line"></div>
+                <div class="arrow-head"></div>
+                <div class="arrow-label">search_pinterest({ query, filters })</div>
+            </div>
+        </div>
+
+        <!-- Phase 3: Pinterest + Refinement Loop -->
+        <div class="phase">
+            <div class="phase-label">Phase 3 &mdash; Inspiration Discovery</div>
+            <div class="refinement-wrapper">
+                <div class="refinement-label">↻ Refinement Loop</div>
+                <div class="refinement-arrow">User can refine until satisfied →</div>
+
+                <div class="node node-pinterest" style="margin-bottom: 12px;">
+                    <div class="node-title">
+                        Pinterest Scraper
+                        <span class="badge">MCP Tool</span>
+                    </div>
+                    <div class="node-desc">
+                        Scrapes Pinterest search results for the given query. Returns
+                        an array of high-res image URLs, titles, descriptions, and board metadata.
+                        Supports pagination and filter refinement.
+                    </div>
+                    <div class="tool-tag">search_pinterest(query, count, filters)</div>
+                </div>
+
+                <div class="arrow-container">
+                    <div class="arrow">
+                        <div class="arrow-line" style="height: 16px;"></div>
+                        <div class="arrow-head"></div>
+                        <div class="arrow-label">image grid → user</div>
+                    </div>
+                </div>
+
+                <div class="node node-user">
+                    <div class="node-title">
+                        User Selection
+                        <span class="badge">Interactive</span>
+                    </div>
+                    <div class="node-desc">
+                        User browses inspiration grid. Can:<br>
+                        ✓ Select an image to lock in &nbsp;&nbsp;
+                        ↻ Request refinements ("more rustic", "less pink")<br>
+                        Refinements re-trigger the Pinterest scraper with adjusted queries.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow-container">
+            <div class="arrow">
+                <div class="arrow-line"></div>
+                <div class="arrow-head"></div>
+                <div class="arrow-label">selected image URL → Claude vision</div>
+            </div>
+        </div>
+
+        <!-- Phase 4: Vision Extraction -->
+        <div class="phase">
+            <div class="phase-label">Phase 4 &mdash; Item Extraction</div>
+            <div class="node node-vision">
+                <div class="node-title">
+                    Vision Extraction Agent
+                    <span class="badge">Claude Vision</span>
+                </div>
+                <div class="node-desc">
+                    Claude analyzes the selected inspiration image using its native
+                    multimodal capabilities. Extracts every identifiable item into a
+                    structured list with categories, descriptions, and search-friendly
+                    product names.
+                </div>
+                <div class="tool-tag">No MCP needed &middot; native Claude vision</div>
+            </div>
+        </div>
+
+        <div class="arrow-container">
+            <div class="arrow">
+                <div class="arrow-line"></div>
+                <div class="arrow-head"></div>
+                <div class="arrow-label">structured item list → search queries</div>
+            </div>
+        </div>
+
+        <!-- Phase 5: E-Commerce -->
+        <div class="phase">
+            <div class="phase-label">Phase 5 &mdash; Product Search</div>
+            <div class="node node-ecommerce" style="margin-bottom: 16px;">
+                <div class="node-title">
+                    E-Commerce Scraper
+                    <span class="badge">MCP Tool</span>
+                </div>
+                <div class="node-desc">
+                    Takes each extracted item and searches real retailer websites.
+                    Returns actual product listings with verified prices, ratings,
+                    availability, and direct purchase URLs.
+                </div>
+                <div class="tool-tag">search_products(query, retailer, max_results)</div>
+            </div>
+
+            <div class="split-row">
+                <div class="node node-ecommerce" style="padding: 16px 20px;">
+                    <div class="node-title" style="font-size: 0.85rem;">
+                        Amazon
+                    </div>
+                    <div class="node-desc" style="font-size: 0.75rem;">
+                        Product Advertising API<br>
+                        or search page scraping
+                    </div>
+                </div>
+                <div class="node node-ecommerce" style="padding: 16px 20px;">
+                    <div class="node-title" style="font-size: 0.85rem;">
+                        Walmart
+                    </div>
+                    <div class="node-desc" style="font-size: 0.75rem;">
+                        Open API<br>
+                        or Affiliate endpoint
+                    </div>
+                </div>
+                <div class="node node-ecommerce" style="padding: 16px 20px;">
+                    <div class="node-title" style="font-size: 0.85rem;">
+                        Target
+                    </div>
+                    <div class="node-desc" style="font-size: 0.75rem;">
+                        Redsky API<br>
+                        or search scraping
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="arrow-container">
+            <div class="arrow">
+                <div class="arrow-line"></div>
+                <div class="arrow-head"></div>
+                <div class="arrow-label">real product listings → party bucket</div>
+            </div>
+        </div>
+
+        <!-- Phase 6: Party Bucket -->
+        <div class="phase">
+            <div class="phase-label">Phase 6 &mdash; Output</div>
+            <div class="node node-bucket">
+                <div class="node-title">
+                    🎉 Party Bucket
+                    <span class="badge">Frontend UI</span>
+                </div>
+                <div class="node-desc">
+                    Final curated shopping list displayed to user. Each item shows real product
+                    image, name, price, retailer, rating, and a direct "Buy" link. Includes
+                    category grouping, budget tracking, and quantity controls.
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Data Flow Cards -->
+    <div class="data-sidebar">
+        <div class="data-card">
+            <h3>Pinterest Response</h3>
+            <div class="data-item">{ <span>image_url</span>: string }</div>
+            <div class="data-item">{ <span>title</span>: string }</div>
+            <div class="data-item">{ <span>description</span>: string }</div>
+            <div class="data-item">{ <span>board_name</span>: string }</div>
+            <div class="data-item">{ <span>pin_url</span>: string }</div>
+        </div>
+        <div class="data-card">
+            <h3>Extracted Items</h3>
+            <div class="data-item">{ <span>name</span>: "wicker chairs" }</div>
+            <div class="data-item">{ <span>category</span>: "furniture" }</div>
+            <div class="data-item">{ <span>description</span>: string }</div>
+            <div class="data-item">{ <span>search_query</span>: string }</div>
+            <div class="data-item">{ <span>quantity</span>: number }</div>
+        </div>
+        <div class="data-card">
+            <h3>Product Listing</h3>
+            <div class="data-item">{ <span>name</span>: string }</div>
+            <div class="data-item">{ <span>price</span>: number }</div>
+            <div class="data-item">{ <span>url</span>: "https://amzn..." }</div>
+            <div class="data-item">{ <span>image</span>: string }</div>
+            <div class="data-item">{ <span>rating</span>: 4.5 }</div>
+            <div class="data-item">{ <span>retailer</span>: "amazon" }</div>
+        </div>
+    </div>
+
+</body>
+</html>
