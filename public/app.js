@@ -73,70 +73,72 @@
 
   const PLANNER_SYSTEM = [
     'You are a friendly, knowledgeable AI Party Planning Agent built into the PartyPlanner app.',
-    'You help users plan events by gathering their preferences through natural conversation, then building a personalized shopping list.',
+    'You orchestrate a multi-stage pipeline: gather preferences → fetch Pinterest inspiration → analyze chosen image → search real products → build shopping bucket.',
     '',
-    'Information to gather (naturally, not all at once):',
-    '1. Party type and theme/style',
-    '2. Approximate guest count',
-    '3. Budget range',
+    'PIPELINE FLOW:',
     '',
-    'IMAGE ANALYSIS — When the user uploads inspiration images:',
-    '- Analyze each image carefully using your vision capabilities',
-    '- Extract: color palette (list specific hex codes), theme/style keywords, decoration types visible, and estimated budget tier',
-    '- Use these insights to tailor your shopping list recommendations',
-    '- Reference specific elements you see in the images when making suggestions',
+    'STAGE 1 — Gather info (briefly, not all at once):',
+    '- Party type and theme/style',
+    '- Approximate guest count',
+    '- Budget range',
+    'Once you have party type + one other detail, move to Stage 2.',
     '',
-    'SHOPPING LIST — Once you have enough info (party type + at least one other detail, OR images uploaded):',
-    '- Call the show_shopping_list tool with 10-20 real, specific products',
-    '- Products should be actual items you\'d find on Amazon, Walmart, or Target',
-    '- Product names must be specific and searchable (e.g. "Blue & Teal Balloon Garland Kit 120pcs" not just "Balloons")',
-    '- Prices should reflect real retail prices for these items',
-    '- Include a mix of categories: decorations, tableware, entertainment, favors, etc.',
-    '- If user uploaded images, match the color palette and style you detected',
+    'STAGE 2 — Fetch Pinterest inspiration:',
+    '- Call search_pinterest_inspiration with a descriptive query matching their vision',
+    '- Example queries: "bohemian garden tea party decor", "moana birthday party kids", "rose gold elegant wedding"',
+    '- The app displays the returned images as a selectable grid for the user.',
+    '- Wait for the user to pick one, or respond to refinement requests like "more rustic" / "less pink" by calling search_pinterest_inspiration again with refined query.',
     '',
-    'ONGOING CONVERSATION:',
-    '- After showing the shopping list, remain available to help',
-    '- If the user asks to add items, change quantities, or remove items, call update_party_bucket',
-    '- Keep responses concise: 1-3 sentences',
-    '- Be warm and enthusiastic',
-    '- React to what the user actually says. If they change their mind, acknowledge it naturally',
-    '- Do not repeat questions the user already answered',
+    'STAGE 3 — Extract items from chosen image:',
+    '- When the user selects an inspiration image, they will upload it back to you as a vision input.',
+    '- Analyze the image and identify every distinct item: furniture, decor, tableware, florals, lighting, etc.',
+    '- For each item, decide a specific searchable product name (e.g. "wicker rattan dining chairs" not "chairs").',
+    '',
+    'STAGE 4 — Search real products:',
+    '- For each identified item, call search_real_products with the product name and best retailer.',
+    '- The app will fetch live listings from Amazon/Walmart/Target and add them to the Party Bucket automatically.',
+    '- After all searches complete, summarize what was added.',
+    '',
+    'ONGOING:',
+    '- If user asks to add, remove, or change items later, call update_party_bucket.',
+    '- If user wants different inspiration, call search_pinterest_inspiration again.',
+    '- Keep responses concise: 1-3 sentences. Be warm and enthusiastic.',
+    '- React to what the user actually says. Do not repeat questions already answered.',
+    '',
+    'WHEN USER UPLOADS OWN IMAGES (not from Pinterest): skip Stage 2, go straight to Stage 3 analysis.',
   ].join('\n');
 
   const PLANNER_TOOLS = [
     {
-      name: 'show_shopping_list',
-      description: 'Display a shopping list of recommended products for the party. Call this once you know the party type/theme and at least one other detail, or when the user has uploaded inspiration images. Include 10-20 specific, real products with realistic prices.',
+      name: 'search_pinterest_inspiration',
+      description: 'Fetch a grid of real inspiration images from Pinterest for the user to choose from. Call this once you know the party type and theme. Also call when the user wants refined/different inspiration (e.g. "more rustic", "less pink").',
       input_schema: {
         type: 'object',
         properties: {
+          query: { type: 'string', description: 'Descriptive Pinterest search query (e.g. "bohemian garden tea party decor", "rose gold elegant wedding table")' },
           party_type: { type: 'string', description: 'The type of party' },
           theme: { type: 'string', description: 'Theme or style' },
-          color_palette: {
-            type: 'array',
-            description: 'Hex color codes extracted from inspiration images or matching the theme',
-            items: { type: 'string' },
-          },
-          items: {
-            type: 'array',
-            description: '10-20 real products with realistic retail prices',
-            items: {
-              type: 'object',
-              properties: {
-                name: { type: 'string', description: 'Specific, searchable product name (e.g. "Rose Gold Balloon Garland Kit 120pcs")' },
-                price: { type: 'number', description: 'Realistic retail price in USD' },
-                category: {
-                  type: 'string',
-                  enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking', 'lighting', 'florals'],
-                },
-                store: { type: 'string', enum: ['Amazon', 'Walmart', 'Target'], description: 'Which retailer carries this item' },
-                quantity: { type: 'number', description: 'Suggested quantity, default 1' },
-              },
-              required: ['name', 'price', 'category', 'store'],
-            },
-          },
+          max_results: { type: 'number', description: 'Number of images to return (default 12)' },
         },
-        required: ['party_type', 'items'],
+        required: ['query'],
+      },
+    },
+    {
+      name: 'search_real_products',
+      description: 'Search real retailer websites (Amazon/Walmart/Target) for a product and add the best matching listings to the Party Bucket. Call this for EACH item identified in the chosen inspiration image.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Specific product search query (e.g. "wicker rattan dining chair", "eucalyptus garland 6ft")' },
+          retailer: { type: 'string', enum: ['amazon', 'walmart', 'target'], description: 'Which retailer to search (default amazon)' },
+          category: {
+            type: 'string',
+            enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking', 'lighting', 'florals', 'furniture'],
+            description: 'Category for bucket organization',
+          },
+          max_results: { type: 'number', description: 'Max listings to return (default 1, the top match gets auto-added)' },
+        },
+        required: ['query', 'category'],
       },
     },
     {
@@ -233,38 +235,72 @@
 
     // Handle tool calls
     for (const tool of toolUses) {
-      if (tool.name === 'show_shopping_list') {
+      if (tool.name === 'search_pinterest_inspiration') {
         const inp = tool.input || {};
         if (inp.party_type) state.partyType = inp.party_type;
         if (inp.theme) state.theme = inp.theme;
-        if (inp.color_palette) state.colorPalette = inp.color_palette;
 
-        const items = (inp.items || []).map(p => ({
-          id: generateId(),
-          name: p.name,
-          price: p.price,
-          category: p.category,
-          store: p.store || storeNames[Math.abs(hashString(p.name)) % storeNames.length],
-          quantity: p.quantity || 1,
-        }));
+        // Fetch real Pinterest results from our scraper
+        const pins = await fetchPinterestInspiration(inp.query, inp.max_results || 12);
 
-        data.moodBoardItems = items;
-        state.stage = 'complete';
+        // Display as selectable grid
+        addPinterestGrid(pins, tool.id);
 
-        // Show shopping list in chat
-        addShoppingListToChat(items, inp.color_palette);
-
-        // Send tool result back to Claude
+        // Tool result: tell Claude what we got, wait for user to select
         state.apiMessages.push({
           role: 'user',
           content: [{
             type: 'tool_result',
             tool_use_id: tool.id,
-            content: `Shopping list with ${items.length} items displayed. The user can now add items to their Party Bucket. Ask if they want to adjust anything.`,
+            content: `Displayed ${pins.length} Pinterest inspiration images for "${inp.query}". Waiting for the user to select one or request refinement.`,
           }],
         });
 
-        // Get Claude's follow-up
+        saveData(data);
+        await sendToLLMContinue();
+        return;
+      }
+
+      if (tool.name === 'search_real_products') {
+        const inp = tool.input || {};
+
+        // Fetch real listings from retailer
+        const products = await fetchRealProducts(inp.query, inp.retailer || 'amazon', inp.max_results || 1);
+
+        let toolResultText;
+        if (products.length === 0) {
+          toolResultText = `No products found for "${inp.query}" on ${inp.retailer || 'amazon'}. Try a different query or retailer.`;
+        } else {
+          // Auto-add the top match to the bucket
+          const top = products[0];
+          const newItem = {
+            id: generateId(),
+            name: top.name,
+            price: top.price,
+            store: top.retailer,
+            category: inp.category || 'decorations',
+            quantity: 1,
+            url: top.url,
+            image: top.image,
+            rating: top.rating,
+          };
+          data.partyBucket.push(newItem);
+          saveData(data);
+          updateBucketUI();
+
+          toolResultText = `Added "${top.name}" ($${top.price}) from ${top.retailer} to Party Bucket.`;
+        }
+
+        // Send tool result
+        state.apiMessages.push({
+          role: 'user',
+          content: [{
+            type: 'tool_result',
+            tool_use_id: tool.id,
+            content: toolResultText,
+          }],
+        });
+
         saveData(data);
         await sendToLLMContinue();
         return;
@@ -407,6 +443,143 @@
 
   function getBucketTotal() {
     return data.partyBucket.reduce((s, item) => s + (item.price * (item.quantity || 1)), 0);
+  }
+
+  // ══════════════════════════════════════
+  //  MCP Pipeline: Pinterest + Products
+  // ══════════════════════════════════════
+
+  async function fetchPinterestInspiration(query, maxResults) {
+    try {
+      const res = await fetch('/api/search-pinterest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, max_results: maxResults || 12 }),
+      });
+      const data = await res.json();
+      return data.pins || [];
+    } catch (err) {
+      console.error('Pinterest fetch failed:', err);
+      return [];
+    }
+  }
+
+  async function fetchRealProducts(query, retailer, maxResults) {
+    try {
+      const res = await fetch('/api/search-products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, retailer, max_results: maxResults || 1 }),
+      });
+      const data = await res.json();
+      return data.products || [];
+    } catch (err) {
+      console.error('Product search failed:', err);
+      return [];
+    }
+  }
+
+  // Render Pinterest inspiration grid in chat
+  function addPinterestGrid(pins, toolUseId) {
+    const msg = document.createElement('div');
+    msg.className = 'chat-message assistant';
+    msg.style.maxWidth = '100%';
+
+    if (pins.length === 0) {
+      msg.innerHTML = '<em>No Pinterest results found. Try a different description or refinement.</em>';
+      chatMessages.appendChild(msg);
+      scrollChatToBottom();
+      return;
+    }
+
+    const heading = document.createElement('div');
+    heading.className = 'pinterest-heading';
+    heading.textContent = `Pick the inspiration you love — I'll extract every item and find real products for your bucket.`;
+    msg.appendChild(heading);
+
+    const grid = document.createElement('div');
+    grid.className = 'pinterest-grid';
+
+    pins.forEach((pin, i) => {
+      const card = document.createElement('div');
+      card.className = 'pinterest-card';
+      card.innerHTML = `
+        <div class="pinterest-img-wrap">
+          <img src="${pin.image_url}" alt="${escapeHtml(pin.title || 'Inspiration')}" loading="lazy">
+        </div>
+        <button class="pinterest-select-btn" data-idx="${i}">Use this inspiration</button>
+      `;
+      grid.appendChild(card);
+    });
+
+    msg.appendChild(grid);
+    chatMessages.appendChild(msg);
+    scrollChatToBottom();
+
+    // Wire up selection handlers
+    grid.querySelectorAll('.pinterest-select-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const idx = parseInt(btn.dataset.idx, 10);
+        const chosenPin = pins[idx];
+        if (!chosenPin) return;
+
+        // Disable all buttons and highlight the chosen one
+        grid.querySelectorAll('.pinterest-select-btn').forEach(b => {
+          b.disabled = true;
+          b.textContent = b === btn ? '✓ Selected' : 'Use this inspiration';
+          b.classList.toggle('selected', b === btn);
+        });
+        grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
+          c.classList.toggle('selected', i === idx);
+          c.classList.toggle('dimmed', i !== idx);
+        });
+
+        await handlePinterestSelection(chosenPin);
+      });
+    });
+  }
+
+  // When user picks a Pinterest image, feed it back to Claude as a vision input
+  async function handlePinterestSelection(pin) {
+    const state = data.plannerState;
+    if (!state || !state.apiMessages) return;
+
+    addChatMessage('user', `I love this one! Please analyze it and find the items.`);
+
+    // Fetch image, convert to base64 (so Claude vision can see it)
+    let imageBlock = null;
+    try {
+      const imgRes = await fetch(pin.image_url);
+      const blob = await imgRes.blob();
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = reader.result;
+          const match = result.match(/^data:(image\/[^;]+);base64,(.+)$/);
+          if (match) resolve({ mediaType: match[1], data: match[2] });
+          else reject(new Error('Could not extract base64'));
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      imageBlock = {
+        type: 'image',
+        source: { type: 'base64', media_type: base64.mediaType, data: base64.data },
+      };
+    } catch (err) {
+      console.warn('Could not fetch Pinterest image for vision, using URL reference:', err);
+    }
+
+    const contentBlocks = [];
+    if (imageBlock) contentBlocks.push(imageBlock);
+    contentBlocks.push({
+      type: 'text',
+      text: `I selected this inspiration from Pinterest: ${pin.pin_url || pin.image_url}. Please analyze the image: identify every distinct item (furniture, decor, tableware, florals, lighting, etc.), then for each item call search_real_products to find and add real listings to my Party Bucket.`,
+    });
+
+    state.apiMessages.push({ role: 'user', content: contentBlocks });
+    saveData(data);
+    sendToLLM();
   }
 
   // Display shopping list products in the chat
