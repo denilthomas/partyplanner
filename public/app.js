@@ -233,210 +233,153 @@
       addAssistantMessage(textParts.join('\n'));
     }
 
-    // Handle tool calls
-    for (const tool of toolUses) {
-      if (tool.name === 'search_pinterest_inspiration') {
-        const inp = tool.input || {};
-        if (inp.party_type) state.partyType = inp.party_type;
-        if (inp.theme) state.theme = inp.theme;
-
-        // Fetch real Pinterest results from our scraper
-        const pins = await fetchPinterestInspiration(inp.query, inp.max_results || 12);
-
-        // Display as selectable grid
-        addPinterestGrid(pins, tool.id);
-
-        // Tool result: tell Claude what we got, wait for user to select
-        state.apiMessages.push({
-          role: 'user',
-          content: [{
-            type: 'tool_result',
-            tool_use_id: tool.id,
-            content: `Displayed ${pins.length} Pinterest inspiration images for "${inp.query}". Waiting for the user to select one or request refinement.`,
-          }],
-        });
-
-        saveData(data);
-        await sendToLLMContinue();
-        return;
-      }
-
-      if (tool.name === 'search_real_products') {
-        const inp = tool.input || {};
-
-        // Fetch real listings from retailer
-        const products = await fetchRealProducts(inp.query, inp.retailer || 'amazon', inp.max_results || 1);
-
-        let toolResultText;
-        if (products.length === 0) {
-          toolResultText = `No products found for "${inp.query}" on ${inp.retailer || 'amazon'}. Try a different query or retailer.`;
-        } else {
-          // Auto-add the top match to the bucket
-          const top = products[0];
-          const newItem = {
-            id: generateId(),
-            name: top.name,
-            price: top.price,
-            store: top.retailer,
-            category: inp.category || 'decorations',
-            quantity: 1,
-            url: top.url,
-            image: top.image,
-            rating: top.rating,
-          };
-          data.partyBucket.push(newItem);
-          saveData(data);
-          updateBucketUI();
-
-          toolResultText = `Added "${top.name}" ($${top.price}) from ${top.retailer} to Party Bucket.`;
-        }
-
-        // Send tool result
-        state.apiMessages.push({
-          role: 'user',
-          content: [{
-            type: 'tool_result',
-            tool_use_id: tool.id,
-            content: toolResultText,
-          }],
-        });
-
-        saveData(data);
-        await sendToLLMContinue();
-        return;
-      }
-
-      if (tool.name === 'update_party_bucket') {
-        const inp = tool.input || {};
-        const results = [];
-
-        for (const action of (inp.actions || [])) {
-          if (action.action === 'add') {
-            const newItem = {
-              id: generateId(),
-              name: action.item_name,
-              price: action.price || 0,
-              store: action.store || 'Amazon',
-              category: action.category || 'decorations',
-              quantity: action.quantity || 1,
-            };
-            data.partyBucket.push(newItem);
-            results.push(`Added "${action.item_name}" to bucket`);
-          } else if (action.action === 'remove') {
-            const idx = data.partyBucket.findIndex(b =>
-              b.name.toLowerCase().includes(action.item_name.toLowerCase()) ||
-              action.item_name.toLowerCase().includes(b.name.toLowerCase())
-            );
-            if (idx !== -1) {
-              results.push(`Removed "${data.partyBucket[idx].name}" from bucket`);
-              data.partyBucket.splice(idx, 1);
-            } else {
-              results.push(`Could not find "${action.item_name}" in bucket`);
-            }
-          } else if (action.action === 'update_quantity') {
-            const item = data.partyBucket.find(b =>
-              b.name.toLowerCase().includes(action.item_name.toLowerCase()) ||
-              action.item_name.toLowerCase().includes(b.name.toLowerCase())
-            );
-            if (item) {
-              item.quantity = action.quantity || 1;
-              results.push(`Updated "${item.name}" quantity to ${item.quantity}`);
-            } else {
-              results.push(`Could not find "${action.item_name}" in bucket`);
-            }
-          }
-        }
-
-        saveData(data);
-        updateBucketUI();
-        refreshMoodItemCards();
-
-        // Send tool result
-        state.apiMessages.push({
-          role: 'user',
-          content: [{
-            type: 'tool_result',
-            tool_use_id: tool.id,
-            content: results.join('. ') + `. Bucket now has ${data.partyBucket.length} items, total: ${formatCurrency(getBucketTotal())}.`,
-          }],
-        });
-
-        saveData(data);
-        await sendToLLMContinue();
-        return;
-      }
+    // Handle tool calls — process ALL tool_use blocks and send results together
+    if (toolUses.length > 0) {
+      await handleToolUses(toolUses, state);
     }
 
     saveData(data);
   }
 
-  // Continue LLM conversation after a tool result (no typing indicator needed since we already showed one)
+  async function processOneTool(tool, state) {
+    if (tool.name === 'search_pinterest_inspiration') {
+      const inp = tool.input || {};
+      if (inp.party_type) state.partyType = inp.party_type;
+      if (inp.theme) state.theme = inp.theme;
+
+      const pins = await fetchPinterestInspiration(inp.query, inp.max_results || 12);
+      addPinterestGrid(pins, tool.id);
+
+      return {
+        type: 'tool_result',
+        tool_use_id: tool.id,
+        content: `Displayed ${pins.length} Pinterest inspiration images for "${inp.query}". Waiting for the user to select one or request refinement.`,
+      };
+    }
+
+    if (tool.name === 'search_real_products') {
+      const inp = tool.input || {};
+      const products = await fetchRealProducts(inp.query, inp.retailer || 'amazon', inp.max_results || 1);
+
+      if (products.length === 0) {
+        return {
+          type: 'tool_result',
+          tool_use_id: tool.id,
+          content: `No products found for "${inp.query}" on ${inp.retailer || 'amazon'}. Try a different query or retailer.`,
+        };
+      }
+
+      const top = products[0];
+      data.partyBucket.push({
+        id: generateId(),
+        name: top.name,
+        price: top.price,
+        store: top.retailer,
+        category: inp.category || 'decorations',
+        quantity: 1,
+        url: top.url,
+        image: top.image,
+        rating: top.rating,
+      });
+      saveData(data);
+      updateBucketUI();
+
+      return {
+        type: 'tool_result',
+        tool_use_id: tool.id,
+        content: `Added "${top.name}" ($${top.price}) from ${top.retailer} to Party Bucket.`,
+      };
+    }
+
+    if (tool.name === 'update_party_bucket') {
+      const inp = tool.input || {};
+      const results = [];
+
+      for (const action of (inp.actions || [])) {
+        if (action.action === 'add') {
+          data.partyBucket.push({
+            id: generateId(),
+            name: action.item_name,
+            price: action.price || 0,
+            store: action.store || 'Amazon',
+            category: action.category || 'decorations',
+            quantity: action.quantity || 1,
+          });
+          results.push(`Added "${action.item_name}" to bucket`);
+        } else if (action.action === 'remove') {
+          const idx = data.partyBucket.findIndex(b =>
+            b.name.toLowerCase().includes(action.item_name.toLowerCase()) ||
+            action.item_name.toLowerCase().includes(b.name.toLowerCase())
+          );
+          if (idx !== -1) {
+            results.push(`Removed "${data.partyBucket[idx].name}" from bucket`);
+            data.partyBucket.splice(idx, 1);
+          } else {
+            results.push(`Could not find "${action.item_name}" in bucket`);
+          }
+        } else if (action.action === 'update_quantity') {
+          const item = data.partyBucket.find(b =>
+            b.name.toLowerCase().includes(action.item_name.toLowerCase()) ||
+            action.item_name.toLowerCase().includes(b.name.toLowerCase())
+          );
+          if (item) {
+            item.quantity = action.quantity || 1;
+            results.push(`Updated "${item.name}" quantity to ${item.quantity}`);
+          } else {
+            results.push(`Could not find "${action.item_name}" in bucket`);
+          }
+        }
+      }
+
+      saveData(data);
+      updateBucketUI();
+
+      return {
+        type: 'tool_result',
+        tool_use_id: tool.id,
+        content: results.join('. ') + `. Bucket now has ${data.partyBucket.length} items, total: ${formatCurrency(getBucketTotal())}.`,
+      };
+    }
+
+    return {
+      type: 'tool_result',
+      tool_use_id: tool.id,
+      content: 'Unknown tool.',
+    };
+  }
+
+  async function handleToolUses(toolUses, state) {
+    const toolResults = [];
+    for (const tool of toolUses) {
+      const result = await processOneTool(tool, state);
+      toolResults.push(result);
+    }
+
+    state.apiMessages.push({ role: 'user', content: toolResults });
+    saveData(data);
+
+    await sendToLLMContinue();
+  }
+
   async function sendToLLMContinue() {
     const state = data.plannerState;
     if (!state || !state.apiMessages) return;
 
     const result = await callClaude(state.apiMessages);
-    if (result && !result.error && result.content) {
-      const texts = result.content.filter(b => b.type === 'text').map(b => b.text);
-      const toolUses = result.content.filter(b => b.type === 'tool_use');
+    if (!result || result.error || !result.content) return;
 
-      state.apiMessages.push({ role: 'assistant', content: result.content });
+    const texts = result.content.filter(b => b.type === 'text').map(b => b.text);
+    const toolUses = result.content.filter(b => b.type === 'tool_use');
 
-      if (texts.length > 0) {
-        addAssistantMessage(texts.join('\n'));
-      }
+    state.apiMessages.push({ role: 'assistant', content: result.content });
 
-      // Handle any further tool calls recursively
-      for (const tool of toolUses) {
-        if (tool.name === 'update_party_bucket') {
-          const inp = tool.input || {};
-          const results = [];
-          for (const action of (inp.actions || [])) {
-            if (action.action === 'add') {
-              data.partyBucket.push({
-                id: generateId(),
-                name: action.item_name,
-                price: action.price || 0,
-                store: action.store || 'Amazon',
-                category: action.category || 'decorations',
-                quantity: action.quantity || 1,
-              });
-              results.push(`Added "${action.item_name}"`);
-            } else if (action.action === 'remove') {
-              const idx = data.partyBucket.findIndex(b =>
-                b.name.toLowerCase().includes(action.item_name.toLowerCase())
-              );
-              if (idx !== -1) {
-                results.push(`Removed "${data.partyBucket[idx].name}"`);
-                data.partyBucket.splice(idx, 1);
-              }
-            } else if (action.action === 'update_quantity') {
-              const item = data.partyBucket.find(b =>
-                b.name.toLowerCase().includes(action.item_name.toLowerCase())
-              );
-              if (item) {
-                item.quantity = action.quantity || 1;
-                results.push(`Updated "${item.name}" qty to ${item.quantity}`);
-              }
-            }
-          }
-          saveData(data);
-          updateBucketUI();
+    if (texts.length > 0) {
+      addAssistantMessage(texts.join('\n'));
+    }
 
-          state.apiMessages.push({
-            role: 'user',
-            content: [{
-              type: 'tool_result',
-              tool_use_id: tool.id,
-              content: results.join('. ') + `. Bucket: ${data.partyBucket.length} items, ${formatCurrency(getBucketTotal())}.`,
-            }],
-          });
-          saveData(data);
-          await sendToLLMContinue();
-          return;
-        }
-      }
-
+    if (toolUses.length > 0) {
+      await handleToolUses(toolUses, state);
+    } else {
       saveData(data);
     }
   }
