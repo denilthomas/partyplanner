@@ -1,12 +1,11 @@
 const express = require('express');
 const path = require('path');
 const { searchPinterest, closeBrowser: closePinterest } = require('./mcp-servers/pinterest-scraper');
-const { searchProducts, closeBrowser: closeProducts } = require('./mcp-servers/product-scraper');
+const { searchProducts } = require('./mcp-servers/product-scraper');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Your Anthropic API key — set via environment variable
 const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
 
 app.use(express.json({ limit: '50mb' }));
@@ -56,7 +55,7 @@ app.post('/api/search-pinterest', async (req, res) => {
   }
 });
 
-// ── Product scraper endpoint ──
+// ── Product search endpoint (SerpApi) ──
 app.post('/api/search-products', async (req, res) => {
   const { query, retailer = 'amazon', max_results = 5 } = req.body || {};
   if (!query) return res.status(400).json({ error: 'query required' });
@@ -65,15 +64,14 @@ app.post('/api/search-products', async (req, res) => {
     const products = await searchProducts(query, retailer, max_results);
     res.json({ query, retailer, products });
   } catch (err) {
-    console.error('[products] scrape failed:', err.message);
-    res.status(500).json({ error: 'Product scrape failed', detail: err.message, products: [] });
+    console.error('[products] search failed:', err.message);
+    res.status(500).json({ error: 'Product search failed', detail: err.message, products: [] });
   }
 });
 
 // ── Graceful shutdown ──
 process.on('SIGTERM', async () => {
   await closePinterest().catch(() => {});
-  await closeProducts().catch(() => {});
   process.exit(0);
 });
 
