@@ -1,98 +1,50 @@
-// Pinterest Scraper
-// Scrapes real inspiration images from Pinterest search results
+// Inspiration Image Search via SerpApi (Google Images)
+// Reliable API-based image search — no Puppeteer needed
 //
-// Strategy:
-//   1. Primary: Use Pinterest's undocumented search JSON endpoint (fragile but fast)
-//   2. Fallback: Puppeteer-based scrape of the public search page
+// Requires: SERPAPI_KEY environment variable
+// Free tier: 100 searches/month at serpapi.com
 //
 // Returns: array of { image_url, title, description, pin_url }
 
-const puppeteer = require('puppeteer');
-
-// Shared browser instance (launch once, reuse for speed)
-let browserPromise = null;
-
-function getBrowser() {
-  if (!browserPromise) {
-    browserPromise = puppeteer.launch({
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-blink-features=AutomationControlled',
-      ],
-    });
-  }
-  return browserPromise;
-}
+const SERPAPI_KEY = process.env.SERPAPI_KEY || '';
 
 async function searchPinterest(query, maxResults = 12) {
-  const browser = await getBrowser();
-  const page = await browser.newPage();
+  if (!SERPAPI_KEY) {
+    console.error('[image-search] SERPAPI_KEY not set');
+    return [];
+  }
 
   try {
-    // Realistic UA + viewport so Pinterest serves the full grid
-    await page.setUserAgent(
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
-      '(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    );
-    await page.setViewport({ width: 1280, height: 1600 });
+    const params = new URLSearchParams({
+      engine: 'google_images',
+      q: `${query} party decor inspiration`,
+      api_key: SERPAPI_KEY,
+      num: String(maxResults),
+    });
 
-    const searchUrl = `https://www.pinterest.com/search/pins/?q=${encodeURIComponent(query)}&rs=typed`;
-    await page.goto(searchUrl, { waitUntil: 'networkidle2', timeout: 20000 });
+    const res = await fetch(`https://serpapi.com/search.json?${params}`);
+    if (!res.ok) {
+      console.error(`[image-search] SerpApi returned ${res.status}`);
+      return [];
+    }
 
-    // Scroll once to trigger lazy-loaded images
-    await page.evaluate(() => window.scrollBy(0, 1500));
-    await new Promise(r => setTimeout(r, 1200));
+    const data = await res.json();
+    const results = (data.images_results || []).slice(0, maxResults);
 
-    // Extract pins from the grid
-    const pins = await page.evaluate((max) => {
-      const results = [];
-      const seen = new Set();
-
-      // Pinterest uses data-test-id="pin" for pin containers
-      const nodes = document.querySelectorAll('[data-test-id="pin"], div[data-grid-item]');
-
-      for (const node of nodes) {
-        if (results.length >= max) break;
-
-        const img = node.querySelector('img');
-        if (!img || !img.src) continue;
-
-        // Upgrade the thumbnail URL to a higher-res version
-        let src = img.src;
-        src = src.replace(/\/236x\//, '/564x/').replace(/\/60x60\//, '/564x/');
-
-        if (seen.has(src)) continue;
-        seen.add(src);
-
-        const link = node.querySelector('a[href*="/pin/"]');
-        const pinUrl = link ? new URL(link.href, 'https://www.pinterest.com').href : '';
-
-        results.push({
-          image_url: src,
-          title: img.alt || '',
-          description: img.alt || '',
-          pin_url: pinUrl,
-        });
-      }
-
-      return results;
-    }, maxResults);
-
-    return pins;
-  } finally {
-    await page.close();
+    return results.map(item => ({
+      image_url: item.original || item.thumbnail || '',
+      title: item.title || '',
+      description: item.snippet || item.title || '',
+      pin_url: item.link || '',
+    }));
+  } catch (err) {
+    console.error('[image-search] SerpApi request failed:', err.message);
+    return [];
   }
 }
 
-async function closeBrowser() {
-  if (browserPromise) {
-    const browser = await browserPromise;
-    await browser.close();
-    browserPromise = null;
-  }
+function closeBrowser() {
+  return Promise.resolve();
 }
 
 module.exports = { searchPinterest, closeBrowser };
