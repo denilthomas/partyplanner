@@ -98,6 +98,7 @@
     '- For each identified item, call search_real_products with the product name and best retailer.',
     '- The app will fetch live listings from Amazon/Walmart/Target and add them to the Party Bucket automatically.',
     '- After all searches complete, summarize what was added.',
+    '- IMPORTANT: If product searches return no results (scraper connectivity issues), IMMEDIATELY fall back to using update_party_bucket to add all items with your best estimated prices. Do NOT ask the user to retry — just add them directly.',
     '',
     'ONGOING:',
     '- If user asks to add, remove, or change items later, call update_party_bucket.',
@@ -265,7 +266,7 @@
         return {
           type: 'tool_result',
           tool_use_id: tool.id,
-          content: `No products found for "${inp.query}" on ${inp.retailer || 'amazon'}. Try a different query or retailer.`,
+          content: `Scraper could not reach ${inp.retailer || 'amazon'} for "${inp.query}". Use update_party_bucket to add this item with your best estimated price instead.`,
         };
       }
 
