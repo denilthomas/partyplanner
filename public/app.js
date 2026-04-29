@@ -73,7 +73,7 @@
 
   const PLANNER_SYSTEM = [
     'You are a friendly, knowledgeable AI Party Planning Agent built into the PartyPlanner app.',
-    'You orchestrate a multi-stage pipeline: gather preferences → fetch Pinterest inspiration → analyze chosen image → search real products → build shopping bucket.',
+    'You orchestrate a multi-stage pipeline: gather preferences → fetch Pinterest inspiration → user picks images → extract items → user confirms items → frontend searches products → user picks products → add to bucket.',
     '',
     'PIPELINE FLOW:',
     '',
@@ -86,19 +86,15 @@
     'STAGE 2 — Fetch Pinterest inspiration:',
     '- Call search_pinterest_inspiration with a descriptive query matching their vision',
     '- Example queries: "bohemian garden tea party decor", "moana birthday party kids", "rose gold elegant wedding"',
-    '- The app displays the returned images as a selectable grid for the user.',
-    '- Wait for the user to pick one, or respond to refinement requests like "more rustic" / "less pink" by calling search_pinterest_inspiration again with refined query.',
+    '- The app displays the returned images as a selectable grid. The user can pick UP TO 3 inspiration images, then confirms their selection.',
+    '- Wait for the user to confirm, or respond to refinement requests like "more rustic" / "less pink" by calling search_pinterest_inspiration again with refined query.',
     '',
-    'STAGE 3 — Extract items from chosen image:',
-    '- When the user selects an inspiration image, they will upload it back to you as a vision input.',
-    '- Analyze the image and identify every distinct item: furniture, decor, tableware, florals, lighting, etc.',
+    'STAGE 3 — Extract items from chosen images:',
+    '- When the user confirms their inspiration images, they will be sent to you as vision input.',
+    '- Analyze ALL images and identify every distinct item: furniture, decor, tableware, florals, lighting, etc.',
     '- For each item, decide a specific searchable product name (e.g. "wicker rattan dining chairs" not "chairs").',
-    '',
-    'STAGE 4 — Search real products:',
-    '- For each identified item, call search_real_products with the product name and best retailer.',
-    '- The app will fetch live listings from Amazon/Walmart/Target and add them to the Party Bucket automatically.',
-    '- After all searches complete, summarize what was added.',
-    '- IMPORTANT: If product searches return no results (scraper connectivity issues), IMMEDIATELY fall back to using update_party_bucket to add all items with your best estimated prices. Do NOT ask the user to retry — just add them directly.',
+    '- Call show_extracted_items with the complete structured list of items.',
+    '- After extraction, respond briefly while the user reviews items. The frontend handles product search after the user confirms which items they want — do NOT search for products yourself.',
     '',
     'ONGOING:',
     '- If user asks to add, remove, or change items later, call update_party_bucket.',
@@ -125,21 +121,27 @@
       },
     },
     {
-      name: 'search_real_products',
-      description: 'Search real retailer websites (Amazon/Walmart/Target) for a product and add the best matching listings to the Party Bucket. Call this for EACH item identified in the chosen inspiration image.',
+      name: 'show_extracted_items',
+      description: 'Display items extracted from inspiration images as an editable checklist. The user will review and confirm which items they want before product search begins.',
       input_schema: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Specific product search query (e.g. "wicker rattan dining chair", "eucalyptus garland 6ft")' },
-          retailer: { type: 'string', enum: ['amazon', 'walmart', 'target'], description: 'Which retailer to search (default amazon)' },
-          category: {
-            type: 'string',
-            enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking', 'lighting', 'florals', 'furniture'],
-            description: 'Category for bucket organization',
+          items: {
+            type: 'array',
+            description: 'List of items identified in the inspiration images',
+            items: {
+              type: 'object',
+              properties: {
+                name: { type: 'string', description: 'Display name of the item' },
+                search_query: { type: 'string', description: 'Specific search query for finding this product (e.g. "wicker rattan dining chairs set of 4")' },
+                category: { type: 'string', enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking', 'lighting', 'florals', 'furniture'], description: 'Category for bucket organization' },
+                estimated_price: { type: 'number', description: 'Rough price estimate in USD' },
+              },
+              required: ['name', 'search_query', 'category'],
+            },
           },
-          max_results: { type: 'number', description: 'Max listings to return (default 1, the top match gets auto-added)' },
         },
-        required: ['query', 'category'],
+        required: ['items'],
       },
     },
     {
@@ -258,37 +260,22 @@
       };
     }
 
-    if (tool.name === 'search_real_products') {
+    if (tool.name === 'show_extracted_items') {
       const inp = tool.input || {};
-      const products = await fetchRealProducts(inp.query, inp.retailer || 'amazon', inp.max_results || 1);
-
-      if (products.length === 0) {
-        return {
-          type: 'tool_result',
-          tool_use_id: tool.id,
-          content: `Scraper could not reach ${inp.retailer || 'amazon'} for "${inp.query}". Use update_party_bucket to add this item with your best estimated price instead.`,
-        };
-      }
-
-      const top = products[0];
-      data.partyBucket.push({
-        id: generateId(),
-        name: top.name,
-        price: top.price,
-        store: top.retailer,
-        category: inp.category || 'decorations',
-        quantity: 1,
-        url: top.url,
-        image: top.image,
-        rating: top.rating,
-      });
-      saveData(data);
-      updateBucketUI();
-
+      const items = inp.items || [];
+      addExtractedItemsChecklist(items);
       return {
         type: 'tool_result',
         tool_use_id: tool.id,
-        content: `Added "${top.name}" ($${top.price}) from ${top.retailer} to Party Bucket.`,
+        content: `Displayed ${items.length} extracted items as an editable checklist. The user is reviewing which items to keep. Wait for their confirmation.`,
+      };
+    }
+
+    if (tool.name === 'search_real_products') {
+      return {
+        type: 'tool_result',
+        tool_use_id: tool.id,
+        content: 'Unknown tool. Product search is now handled by the frontend after user confirms extracted items.',
       };
     }
 
