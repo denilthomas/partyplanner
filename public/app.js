@@ -410,7 +410,7 @@
     }
   }
 
-  // Render Pinterest inspiration grid in chat
+  // Render Pinterest inspiration grid in chat (multi-select, up to 3)
   function addPinterestGrid(pins, toolUseId) {
     const msg = document.createElement('div');
     msg.className = 'chat-message assistant';
@@ -425,98 +425,358 @@
 
     const heading = document.createElement('div');
     heading.className = 'pinterest-heading';
-    heading.textContent = `Pick the inspiration you love — I'll extract every item and find real products for your bucket.`;
+    heading.textContent = 'Pick up to 3 inspiration images, then confirm your selection.';
     msg.appendChild(heading);
 
     const grid = document.createElement('div');
     grid.className = 'pinterest-grid';
 
+    const selectedPins = new Map(); // idx → pin object
+
+    const counter = document.createElement('div');
+    counter.className = 'pinterest-counter';
+    counter.textContent = '0/3 selected';
+
+    function updateSelectionUI() {
+      counter.textContent = `${selectedPins.size}/3 selected`;
+      confirmBtn.textContent = `Confirm Selection (${selectedPins.size})`;
+      confirmBtn.disabled = selectedPins.size === 0;
+
+      grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
+        const isSelected = selectedPins.has(i);
+        c.classList.toggle('selected', isSelected);
+        // Dim unselected cards when 3 are already chosen
+        c.classList.toggle('dimmed', !isSelected && selectedPins.size >= 3);
+
+        // Update badge
+        let badge = c.querySelector('.pinterest-selection-count');
+        if (isSelected) {
+          if (!badge) {
+            badge = document.createElement('div');
+            badge.className = 'pinterest-selection-count';
+            c.querySelector('.pinterest-img-wrap').appendChild(badge);
+          }
+          // Show the selection order number
+          const order = Array.from(selectedPins.keys()).indexOf(i) + 1;
+          badge.textContent = order;
+        } else if (badge) {
+          badge.remove();
+        }
+      });
+    }
+
     pins.forEach((pin, i) => {
       const card = document.createElement('div');
       card.className = 'pinterest-card';
+      card.style.cursor = 'pointer';
       card.innerHTML = `
-        <div class="pinterest-img-wrap">
+        <div class="pinterest-img-wrap" style="position:relative;">
           <img src="${pin.image_url}" alt="${escapeHtml(pin.title || 'Inspiration')}" loading="lazy">
         </div>
-        <button class="pinterest-select-btn" data-idx="${i}">Use this inspiration</button>
       `;
+
+      card.addEventListener('click', () => {
+        if (selectedPins.has(i)) {
+          selectedPins.delete(i);
+        } else if (selectedPins.size < 3) {
+          selectedPins.set(i, pin);
+        }
+        updateSelectionUI();
+      });
+
       grid.appendChild(card);
     });
 
     msg.appendChild(grid);
+    msg.appendChild(counter);
+
+    const confirmContainer = document.createElement('div');
+    confirmContainer.className = 'pinterest-confirm-container';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn btn-primary pinterest-confirm-btn';
+    confirmBtn.textContent = 'Confirm Selection (0)';
+    confirmBtn.disabled = true;
+    confirmBtn.addEventListener('click', () => {
+      // Disable the grid
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Selection confirmed!';
+      grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
+        c.style.pointerEvents = 'none';
+        if (!selectedPins.has(i)) {
+          c.classList.add('dimmed');
+        }
+      });
+      handleMultiPinterestSelection(Array.from(selectedPins.values()));
+    });
+
+    confirmContainer.appendChild(confirmBtn);
+    msg.appendChild(confirmContainer);
+
     chatMessages.appendChild(msg);
     scrollChatToBottom();
-
-    // Wire up selection handlers
-    grid.querySelectorAll('.pinterest-select-btn').forEach(btn => {
-      btn.addEventListener('click', async () => {
-        const idx = parseInt(btn.dataset.idx, 10);
-        const chosenPin = pins[idx];
-        if (!chosenPin) return;
-
-        // Disable all buttons and highlight the chosen one
-        grid.querySelectorAll('.pinterest-select-btn').forEach(b => {
-          b.disabled = true;
-          b.textContent = b === btn ? '✓ Selected' : 'Use this inspiration';
-          b.classList.toggle('selected', b === btn);
-        });
-        grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
-          c.classList.toggle('selected', i === idx);
-          c.classList.toggle('dimmed', i !== idx);
-        });
-
-        await handlePinterestSelection(chosenPin);
-      });
-    });
   }
 
-  // When user picks a Pinterest image, feed it back to Claude as a vision input
-  async function handlePinterestSelection(pin) {
+  // When user confirms their Pinterest image selections, feed them back to Claude as vision input
+  async function handleMultiPinterestSelection(pins) {
     const state = data.plannerState;
     if (!state || !state.apiMessages) return;
 
-    addChatMessage('user', `I love this one! Please analyze it and find the items.`);
+    addChatMessage('user', `I picked ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}! Please analyze and extract the items.`);
 
-    // Fetch image, convert to JPEG base64 (so Claude vision can see it)
-    let imageBlock = null;
-    try {
-      const imgRes = await fetch(pin.image_url);
-      const blob = await imgRes.blob();
-      const base64 = await new Promise((resolve, reject) => {
-        const img = new Image();
-        img.crossOrigin = 'anonymous';
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.min(img.width, 1024);
-          canvas.height = Math.round(img.height * (canvas.width / img.width));
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-          const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
-          if (match) resolve({ mediaType: match[1], data: match[2] });
-          else reject(new Error('Could not extract base64'));
-        };
-        img.onerror = reject;
-        img.src = URL.createObjectURL(blob);
-      });
-      imageBlock = {
-        type: 'image',
-        source: { type: 'base64', media_type: base64.mediaType, data: base64.data },
-      };
-    } catch (err) {
-      console.warn('Could not fetch image for vision, using URL reference:', err);
+    // Convert all images to base64 JPEG
+    const imageBlocks = [];
+    for (const pin of pins) {
+      try {
+        const imgRes = await fetch(pin.image_url);
+        const blob = await imgRes.blob();
+        const b64 = await new Promise((resolve, reject) => {
+          const img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.min(img.width, 1024);
+            canvas.height = Math.round(img.height * (canvas.width / img.width));
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+            const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+            if (match) resolve({ mediaType: match[1], data: match[2] });
+            else reject(new Error('Could not extract base64'));
+          };
+          img.onerror = reject;
+          img.src = URL.createObjectURL(blob);
+        });
+        imageBlocks.push({
+          type: 'image',
+          source: { type: 'base64', media_type: b64.mediaType, data: b64.data },
+        });
+      } catch (err) {
+        console.warn('Could not convert image:', err);
+      }
     }
 
-    const contentBlocks = [];
-    if (imageBlock) contentBlocks.push(imageBlock);
+    const contentBlocks = [...imageBlocks];
     contentBlocks.push({
       type: 'text',
-      text: `I selected this inspiration from Pinterest: ${pin.pin_url || pin.image_url}. Please analyze the image: identify every distinct item (furniture, decor, tableware, florals, lighting, etc.), then for each item call search_real_products to find and add real listings to my Party Bucket.`,
+      text: `I selected ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}. Please analyze ALL images and identify every distinct item (furniture, decor, tableware, florals, lighting, etc.). For each item, provide a specific searchable product name. Call show_extracted_items with the complete list.`,
     });
 
     state.apiMessages.push({ role: 'user', content: contentBlocks });
     saveData(data);
     sendToLLM();
+  }
+
+  // Render extracted items as an editable checklist in chat
+  function addExtractedItemsChecklist(items) {
+    const msg = document.createElement('div');
+    msg.className = 'chat-message assistant';
+    msg.style.maxWidth = '100%';
+
+    const heading = document.createElement('div');
+    heading.className = 'checklist-heading';
+    heading.innerHTML = '<strong>Items found in your inspiration:</strong><br>Uncheck anything you don\'t need, then click "Find Products".';
+    msg.appendChild(heading);
+
+    const list = document.createElement('div');
+    list.className = 'extracted-items-list';
+
+    const checkedSet = new Set(items.map((_, i) => i));
+
+    items.forEach((item, i) => {
+      const catStyle = getCategoryStyle(item.category);
+      const row = document.createElement('div');
+      row.className = 'extracted-item-row';
+      row.innerHTML = `
+        <label class="extracted-item-label">
+          <input type="checkbox" checked data-idx="${i}" class="extracted-item-check">
+          <div class="extracted-item-swatch" style="background: ${catStyle.gradient}"></div>
+          <div class="extracted-item-info">
+            <span class="extracted-item-name">${escapeHtml(item.name)}</span>
+            <span class="extracted-item-meta">${escapeHtml(catStyle.label)}${item.estimated_price ? ' · ~$' + item.estimated_price : ''}</span>
+          </div>
+        </label>
+      `;
+      const checkbox = row.querySelector('input');
+      checkbox.addEventListener('change', () => {
+        if (checkbox.checked) checkedSet.add(i);
+        else checkedSet.delete(i);
+        confirmBtn.textContent = `Find Products (${checkedSet.size})`;
+        confirmBtn.disabled = checkedSet.size === 0;
+      });
+      list.appendChild(row);
+    });
+
+    msg.appendChild(list);
+
+    const actions = document.createElement('div');
+    actions.className = 'checklist-actions';
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'btn btn-primary checklist-confirm-btn';
+    confirmBtn.textContent = `Find Products (${checkedSet.size})`;
+    confirmBtn.addEventListener('click', () => {
+      const confirmed = items.filter((_, i) => checkedSet.has(i));
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Searching products...';
+      list.querySelectorAll('input').forEach(cb => cb.disabled = true);
+      handleItemsConfirmed(confirmed);
+    });
+    actions.appendChild(confirmBtn);
+    msg.appendChild(actions);
+
+    chatMessages.appendChild(msg);
+    scrollChatToBottom();
+  }
+
+  // Search products for each confirmed item
+  async function handleItemsConfirmed(confirmedItems) {
+    // Show progress
+    const progressMsg = document.createElement('div');
+    progressMsg.className = 'chat-message assistant';
+    progressMsg.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    chatMessages.appendChild(progressMsg);
+    scrollChatToBottom();
+
+    const allResults = [];
+    for (const item of confirmedItems) {
+      const products = await fetchRealProducts(item.search_query, 'amazon', 3);
+      allResults.push({ item, products });
+    }
+
+    progressMsg.remove();
+    addProductResultsList(allResults);
+  }
+
+  // Render product results with checkboxes
+  function addProductResultsList(allResults) {
+    const msg = document.createElement('div');
+    msg.className = 'chat-message assistant';
+    msg.style.maxWidth = '100%';
+
+    const heading = document.createElement('div');
+    heading.className = 'checklist-heading';
+    heading.innerHTML = '<strong>Product matches found!</strong><br>Check the products you want in your Party Bucket.';
+    msg.appendChild(heading);
+
+    const list = document.createElement('div');
+    list.className = 'product-results-list';
+
+    const selectedProducts = new Map(); // key → product+category
+
+    allResults.forEach(({ item, products }) => {
+      if (products.length === 0) return;
+
+      const groupLabel = document.createElement('div');
+      groupLabel.className = 'product-group-label';
+      groupLabel.textContent = item.name;
+      list.appendChild(groupLabel);
+
+      products.forEach((product, pi) => {
+        const key = `${item.name}-${pi}`;
+        const row = document.createElement('div');
+        row.className = 'product-result-row';
+        // First product in each group is pre-checked
+        const isFirst = pi === 0;
+        if (isFirst) selectedProducts.set(key, { product, category: item.category });
+
+        row.innerHTML = `
+          <label class="product-result-label">
+            <input type="checkbox" ${isFirst ? 'checked' : ''} class="product-result-check" data-key="${escapeHtml(key)}">
+            <div class="product-result-image">
+              ${product.image ? `<img src="${escapeHtml(product.image)}" alt="" loading="lazy">` : '<div class="product-no-image">No image</div>'}
+            </div>
+            <div class="product-result-info">
+              <span class="product-result-name">${escapeHtml(product.name)}</span>
+              <span class="product-result-price">${product.price ? '$' + product.price.toFixed(2) : 'Price N/A'}</span>
+              <span class="product-result-retailer">${escapeHtml(product.retailer || 'Google Shopping')}</span>
+            </div>
+          </label>
+        `;
+
+        const checkbox = row.querySelector('input');
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) {
+            selectedProducts.set(key, { product, category: item.category });
+          } else {
+            selectedProducts.delete(key);
+          }
+          const total = Array.from(selectedProducts.values()).reduce((s, v) => s + (v.product.price || 0), 0);
+          addBtn.textContent = `Add to Bucket (${selectedProducts.size} items · $${total.toFixed(2)})`;
+          addBtn.disabled = selectedProducts.size === 0;
+        });
+
+        list.appendChild(row);
+      });
+    });
+
+    msg.appendChild(list);
+
+    // If no products found at all
+    if (list.children.length === 0) {
+      list.innerHTML = '<div class="product-no-results">No products found. The AI agent can still help — just ask in chat!</div>';
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'checklist-actions';
+
+    const total = Array.from(selectedProducts.values()).reduce((s, v) => s + (v.product.price || 0), 0);
+    const addBtn = document.createElement('button');
+    addBtn.className = 'btn btn-primary checklist-confirm-btn';
+    addBtn.textContent = `Add to Bucket (${selectedProducts.size} items · $${total.toFixed(2)})`;
+    addBtn.disabled = selectedProducts.size === 0;
+    addBtn.addEventListener('click', () => {
+      handleProductsConfirmed(selectedProducts);
+      addBtn.disabled = true;
+      addBtn.textContent = 'Added to Bucket!';
+      list.querySelectorAll('input').forEach(cb => cb.disabled = true);
+    });
+    actions.appendChild(addBtn);
+    msg.appendChild(actions);
+
+    chatMessages.appendChild(msg);
+    scrollChatToBottom();
+  }
+
+  // Add confirmed products to bucket and check budget
+  function handleProductsConfirmed(selectedProducts) {
+    for (const [key, { product, category }] of selectedProducts) {
+      data.partyBucket.push({
+        id: generateId(),
+        name: product.name,
+        price: product.price || 0,
+        store: product.retailer || 'Google Shopping',
+        category: category || 'decorations',
+        quantity: 1,
+        url: product.url || '',
+        image: product.image || '',
+        rating: product.rating || null,
+      });
+    }
+    saveData(data);
+    updateBucketUI();
+
+    // Budget check
+    const total = getBucketTotal();
+    const budget = data.plannerState && data.plannerState.budget;
+    let budgetMsg = `Added ${selectedProducts.size} items to your Party Bucket! Total: $${total.toFixed(2)}.`;
+    if (budget && total > budget) {
+      budgetMsg += `\n\n⚠️ Heads up — your total ($${total.toFixed(2)}) exceeds your budget of $${budget.toFixed(2)} by $${(total - budget).toFixed(2)}. You can adjust quantities or remove items in the Party Bucket.`;
+    } else if (budget) {
+      budgetMsg += `\n\n✅ You're within your $${budget.toFixed(2)} budget with $${(budget - total).toFixed(2)} remaining.`;
+    }
+    addAssistantMessage(budgetMsg);
+
+    // Tell Claude what happened so conversation stays coherent
+    const state = data.plannerState;
+    if (state && state.apiMessages) {
+      state.apiMessages.push({
+        role: 'user',
+        content: `I confirmed ${selectedProducts.size} products and they've been added to my Party Bucket. Total is $${total.toFixed(2)}.${budget ? ` My budget is $${budget.toFixed(2)}.` : ''}`,
+      });
+      saveData(data);
+      sendToLLM();
+    }
   }
 
   // Display shopping list products in the chat
