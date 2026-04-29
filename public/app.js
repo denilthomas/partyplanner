@@ -490,28 +490,34 @@
 
     addChatMessage('user', `I love this one! Please analyze it and find the items.`);
 
-    // Fetch image, convert to base64 (so Claude vision can see it)
+    // Fetch image, convert to JPEG base64 (so Claude vision can see it)
     let imageBlock = null;
     try {
       const imgRes = await fetch(pin.image_url);
       const blob = await imgRes.blob();
       const base64 = await new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result;
-          const match = result.match(/^data:(image\/[^;]+);base64,(.+)$/);
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.min(img.width, 1024);
+          canvas.height = Math.round(img.height * (canvas.width / img.width));
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
           if (match) resolve({ mediaType: match[1], data: match[2] });
           else reject(new Error('Could not extract base64'));
         };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
+        img.onerror = reject;
+        img.src = URL.createObjectURL(blob);
       });
       imageBlock = {
         type: 'image',
         source: { type: 'base64', media_type: base64.mediaType, data: base64.data },
       };
     } catch (err) {
-      console.warn('Could not fetch Pinterest image for vision, using URL reference:', err);
+      console.warn('Could not fetch image for vision, using URL reference:', err);
     }
 
     const contentBlocks = [];
