@@ -8,6 +8,17 @@
 
 const SERPAPI_KEY = process.env.SERPAPI_KEY || '';
 
+const APPROVED_RETAILERS = [
+  'amazon', 'walmart', 'target', 'etsy', 'michaels',
+  'hobby lobby', 'ace hardware', 'home depot',
+];
+
+function isApprovedRetailer(source) {
+  if (!source) return false;
+  const lower = source.toLowerCase();
+  return APPROVED_RETAILERS.some(r => lower.includes(r));
+}
+
 async function searchProducts(query, retailer = 'amazon', maxResults = 5) {
   if (!SERPAPI_KEY) {
     console.error('[product-search] SERPAPI_KEY not set');
@@ -19,7 +30,7 @@ async function searchProducts(query, retailer = 'amazon', maxResults = 5) {
       engine: 'google_shopping',
       q: query,
       api_key: SERPAPI_KEY,
-      num: String(maxResults),
+      num: String(Math.max(maxResults * 4, 20)),
     });
 
     const res = await fetch(`https://serpapi.com/search.json?${params}`);
@@ -29,9 +40,11 @@ async function searchProducts(query, retailer = 'amazon', maxResults = 5) {
     }
 
     const data = await res.json();
-    const results = (data.shopping_results || []).slice(0, maxResults);
+    const all = data.shopping_results || [];
 
-    return results.map(item => ({
+    const filtered = all.filter(item => isApprovedRetailer(item.source));
+
+    return filtered.slice(0, maxResults).map(item => ({
       name: item.title || '',
       price: item.extracted_price || 0,
       url: item.link || item.product_link || '',

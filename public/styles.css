@@ -1639,6 +1639,17 @@ footer {
   color: #888;
 }
 
+.product-result-link {
+  font-size: 0.8rem;
+  color: #6c5ce7;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.product-result-link:hover {
+  text-decoration: underline;
+}
+
 .product-no-results {
   padding: 20px;
   text-align: center;

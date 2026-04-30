@@ -690,6 +690,7 @@
               <span class="product-result-name">${escapeHtml(product.name)}</span>
               <span class="product-result-price">${product.price ? '$' + product.price.toFixed(2) : 'Price N/A'}</span>
               <span class="product-result-retailer">${escapeHtml(product.retailer || 'Google Shopping')}</span>
+              ${product.url ? `<a href="${escapeHtml(product.url)}" target="_blank" rel="noopener" class="product-result-link" onclick="event.stopPropagation()">View listing &rarr;</a>` : ''}
             </div>
           </label>
         `;
