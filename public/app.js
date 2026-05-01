@@ -89,12 +89,24 @@
     '- The app displays the returned images as a selectable grid. The user can pick UP TO 3 inspiration images, then confirms their selection.',
     '- Wait for the user to confirm, or respond to refinement requests like "more rustic" / "less pink" by calling search_pinterest_inspiration again with refined query.',
     '',
-    'STAGE 3 — Extract items from chosen images:',
+    'STAGE 3 — Extract buyable items from chosen images:',
     '- When the user confirms their inspiration images, they will be sent to you as vision input.',
-    '- Analyze ALL images and identify every distinct item: furniture, decor, tableware, florals, lighting, etc.',
-    '- For each item, decide a specific searchable product name (e.g. "wicker rattan dining chairs" not "chairs").',
-    '- Call show_extracted_items with the complete structured list of items.',
+    '- Switch to your EXTRACTION AGENT role (see below) and analyze the images.',
+    '- Call show_extracted_items with the categorized results.',
     '- After extraction, respond briefly while the user reviews items. The frontend handles product search after the user confirms which items they want — do NOT search for products yourself.',
+    '',
+    'EXTRACTION AGENT ROLE:',
+    'You are an expert AI Party Stylist and Sourcing Specialist. Your goal is to look at party inspiration images and extract "Buyable" elements that a host needs to recreate this look on a realistic budget.',
+    '',
+    'CATEGORY DEFINITIONS:',
+    '1. Essentials (High Priority): Consumables and "must-haves" like plates, napkins, balloons, streamers, cutlery, table liners. Affordable, found in bulk kits.',
+    '2. Statement Pieces (Medium Priority): Items that define the theme\'s "look" — specific backdrops, unique cake toppers, themed banners. Limit to 3-5 high-impact items.',
+    '3. Environment (FILTER OUT): Ignore furniture (chairs, tables), permanent fixtures (flooring, custom lighting), food items (cakes, cupcakes), or anything likely to cost >$100.',
+    '',
+    'EXTRACTION CONSTRAINTS:',
+    '- Focus on items available at major retailers (Amazon, Walmart, Target, Michaels, Hobby Lobby, Etsy).',
+    '- Group similar items (e.g. "Firetruck plates and napkins") to keep the list concise.',
+    '- Provide a specific search query for each item that would find it on a retailer website.',
     '',
     'ONGOING:',
     '- If user asks to add, remove, or change items later, call update_party_bucket.',
@@ -122,26 +134,48 @@
     },
     {
       name: 'show_extracted_items',
-      description: 'Display items extracted from inspiration images as an editable checklist. The user will review and confirm which items they want before product search begins.',
+      description: 'Display categorized items extracted from inspiration images. Essentials are must-have consumables, Statement Pieces are high-impact theme items, and Environment items are filtered out (furniture, food, fixtures).',
       input_schema: {
         type: 'object',
         properties: {
-          items: {
+          theme_name: { type: 'string', description: 'Detected theme name (e.g. "Rustic Garden Party", "Firetruck Birthday")' },
+          essentials: {
             type: 'array',
-            description: 'List of items identified in the inspiration images',
+            description: 'High-priority consumables and must-haves (plates, napkins, balloons, streamers, cutlery, table liners)',
             items: {
               type: 'object',
               properties: {
-                name: { type: 'string', description: 'Display name of the item' },
-                search_query: { type: 'string', description: 'Specific search query for finding this product (e.g. "wicker rattan dining chairs set of 4")' },
-                category: { type: 'string', enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking', 'lighting', 'florals', 'furniture'], description: 'Category for bucket organization' },
-                estimated_price: { type: 'number', description: 'Rough price estimate in USD' },
+                item: { type: 'string', description: 'Display name of the item' },
+                search_query: { type: 'string', description: 'Specific retailer search query' },
+                reason: { type: 'string', description: 'Why this item is essential for the look' },
+                estimated_price: { type: 'string', description: 'Price estimate (e.g. "$12-15")' },
+                category: { type: 'string', enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking', 'lighting', 'florals'], description: 'Category for bucket organization' },
               },
-              required: ['name', 'search_query', 'category'],
+              required: ['item', 'search_query', 'reason', 'estimated_price', 'category'],
             },
           },
+          statement_pieces: {
+            type: 'array',
+            description: 'Medium-priority theme-defining items (backdrops, banners, unique toppers). Limit to 3-5.',
+            items: {
+              type: 'object',
+              properties: {
+                item: { type: 'string', description: 'Display name of the item' },
+                search_query: { type: 'string', description: 'Specific retailer search query' },
+                reason: { type: 'string', description: 'Why this piece makes a statement' },
+                estimated_price: { type: 'string', description: 'Price estimate (e.g. "$20-30")' },
+                category: { type: 'string', enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking', 'lighting', 'florals'], description: 'Category for bucket organization' },
+              },
+              required: ['item', 'search_query', 'reason', 'estimated_price', 'category'],
+            },
+          },
+          ignored_items: {
+            type: 'array',
+            description: 'Environment items filtered out (furniture, food, fixtures, items >$100)',
+            items: { type: 'string' },
+          },
         },
-        required: ['items'],
+        required: ['theme_name', 'essentials', 'statement_pieces', 'ignored_items'],
       },
     },
     {
@@ -262,12 +296,14 @@
 
     if (tool.name === 'show_extracted_items') {
       const inp = tool.input || {};
-      const items = inp.items || [];
-      addExtractedItemsChecklist(items);
+      addExtractedItemsChecklist(inp);
+      const essCount = (inp.essentials || []).length;
+      const stmtCount = (inp.statement_pieces || []).length;
+      const ignCount = (inp.ignored_items || []).length;
       return {
         type: 'tool_result',
         tool_use_id: tool.id,
-        content: `Displayed ${items.length} extracted items as an editable checklist. The user is reviewing which items to keep. Wait for their confirmation.`,
+        content: `Displayed extraction results for "${inp.theme_name || 'party'}": ${essCount} essentials, ${stmtCount} statement pieces, ${ignCount} items filtered out. The user is reviewing which items to keep. Wait for their confirmation.`,
       };
     }
 
@@ -559,7 +595,7 @@
     const contentBlocks = [...imageBlocks];
     contentBlocks.push({
       type: 'text',
-      text: `I selected ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}. Please analyze ALL images and identify every distinct item (furniture, decor, tableware, florals, lighting, etc.). For each item, provide a specific searchable product name. Call show_extracted_items with the complete list.`,
+      text: `I selected ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}. Switch to your Extraction Agent role: analyze ALL images, categorize items into Essentials (consumables, must-haves), Statement Pieces (3-5 theme-defining items), and Environment (items to filter out). Call show_extracted_items with the categorized results.`,
     });
 
     state.apiMessages.push({ role: 'user', content: contentBlocks });
@@ -568,58 +604,87 @@
   }
 
   // Render extracted items as an editable checklist in chat
-  function addExtractedItemsChecklist(items) {
+  function addExtractedItemsChecklist(extraction) {
+    const essentials = (extraction.essentials || []).map((it, i) => ({ ...it, _key: 'e' + i, name: it.item, search_query: it.search_query }));
+    const statements = (extraction.statement_pieces || []).map((it, i) => ({ ...it, _key: 's' + i, name: it.item, search_query: it.search_query }));
+    const ignored = extraction.ignored_items || [];
+    const allItems = [...essentials, ...statements];
+
     const msg = document.createElement('div');
     msg.className = 'chat-message assistant';
     msg.style.maxWidth = '100%';
 
     const heading = document.createElement('div');
     heading.className = 'checklist-heading';
-    heading.innerHTML = '<strong>Items found in your inspiration:</strong><br>Uncheck anything you don\'t need, then click "Find Products".';
+    heading.innerHTML = '<strong>' + escapeHtml(extraction.theme_name || 'Your Party') + '</strong><br>Uncheck anything you don\'t need, then click "Find Products".';
     msg.appendChild(heading);
 
-    const list = document.createElement('div');
-    list.className = 'extracted-items-list';
+    const checkedKeys = new Set(allItems.map(it => it._key));
 
-    const checkedSet = new Set(items.map((_, i) => i));
+    function renderSection(title, subtitle, items, cssClass) {
+      const section = document.createElement('div');
+      section.className = 'extraction-section ' + cssClass;
 
-    items.forEach((item, i) => {
-      const catStyle = getCategoryStyle(item.category);
-      const row = document.createElement('div');
-      row.className = 'extracted-item-row';
-      row.innerHTML = `
-        <label class="extracted-item-label">
-          <input type="checkbox" checked data-idx="${i}" class="extracted-item-check">
-          <div class="extracted-item-swatch" style="background: ${catStyle.gradient}"></div>
-          <div class="extracted-item-info">
-            <span class="extracted-item-name">${escapeHtml(item.name)}</span>
-            <span class="extracted-item-meta">${escapeHtml(catStyle.label)}${item.estimated_price ? ' · ~$' + item.estimated_price : ''}</span>
-          </div>
-        </label>
-      `;
-      const checkbox = row.querySelector('input');
-      checkbox.addEventListener('change', () => {
-        if (checkbox.checked) checkedSet.add(i);
-        else checkedSet.delete(i);
-        confirmBtn.textContent = `Find Products (${checkedSet.size})`;
-        confirmBtn.disabled = checkedSet.size === 0;
+      const header = document.createElement('div');
+      header.className = 'extraction-section-header';
+      header.innerHTML = '<span class="extraction-section-title">' + escapeHtml(title) + '</span><span class="extraction-section-subtitle">' + escapeHtml(subtitle) + '</span>';
+      section.appendChild(header);
+
+      const list = document.createElement('div');
+      list.className = 'extracted-items-list';
+
+      items.forEach(item => {
+        const catStyle = getCategoryStyle(item.category);
+        const row = document.createElement('div');
+        row.className = 'extracted-item-row';
+        row.innerHTML = '<label class="extracted-item-label">' +
+          '<input type="checkbox" checked class="extracted-item-check" data-key="' + item._key + '">' +
+          '<div class="extracted-item-swatch" style="background: ' + catStyle.gradient + '"></div>' +
+          '<div class="extracted-item-info">' +
+            '<span class="extracted-item-name">' + escapeHtml(item.name) + '</span>' +
+            '<span class="extracted-item-reason">' + escapeHtml(item.reason || '') + '</span>' +
+            '<span class="extracted-item-meta">' + escapeHtml(item.estimated_price || '') + '</span>' +
+          '</div>' +
+        '</label>';
+
+        const checkbox = row.querySelector('input');
+        checkbox.addEventListener('change', () => {
+          if (checkbox.checked) checkedKeys.add(item._key);
+          else checkedKeys.delete(item._key);
+          confirmBtn.textContent = 'Find Products (' + checkedKeys.size + ')';
+          confirmBtn.disabled = checkedKeys.size === 0;
+        });
+        list.appendChild(row);
       });
-      list.appendChild(row);
-    });
 
-    msg.appendChild(list);
+      section.appendChild(list);
+      return section;
+    }
+
+    if (essentials.length > 0) {
+      msg.appendChild(renderSection('Essentials', 'Must-have consumables', essentials, 'section-essentials'));
+    }
+    if (statements.length > 0) {
+      msg.appendChild(renderSection('Statement Pieces', 'Theme-defining items', statements, 'section-statements'));
+    }
+
+    if (ignored.length > 0) {
+      const ignoredDiv = document.createElement('div');
+      ignoredDiv.className = 'extraction-ignored';
+      ignoredDiv.innerHTML = '<span class="extraction-ignored-label">Filtered out:</span> ' + ignored.map(it => escapeHtml(it)).join(', ');
+      msg.appendChild(ignoredDiv);
+    }
 
     const actions = document.createElement('div');
     actions.className = 'checklist-actions';
-
     const confirmBtn = document.createElement('button');
     confirmBtn.className = 'btn btn-primary checklist-confirm-btn';
-    confirmBtn.textContent = `Find Products (${checkedSet.size})`;
+    confirmBtn.textContent = 'Find Products (' + checkedKeys.size + ')';
     confirmBtn.addEventListener('click', () => {
-      const confirmed = items.filter((_, i) => checkedSet.has(i));
+      const confirmed = allItems.filter(it => checkedKeys.has(it._key));
       confirmBtn.disabled = true;
       confirmBtn.textContent = 'Searching products...';
-      list.querySelectorAll('input').forEach(cb => cb.disabled = true);
+      msg.querySelectorAll('input').forEach(cb => { cb.disabled = true; });
       handleItemsConfirmed(confirmed);
     });
     actions.appendChild(confirmBtn);
