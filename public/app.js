@@ -89,9 +89,16 @@
     '- The app displays the returned images as a selectable grid. The user can pick UP TO 3 inspiration images, then confirms their selection.',
     '- Wait for the user to confirm, or respond to refinement requests like "more rustic" / "less pink" by calling search_pinterest_inspiration again with refined query.',
     '',
+    'STAGE 2.5 — Space photo (optional):',
+    '- After picking inspiration images, the user may upload a photo of their actual venue/space.',
+    '- If provided, the space photo will be the LAST image in the vision input.',
+    '- Use it to tailor your recommendations: consider size, layout, existing colors, furniture, and lighting.',
+    '- If the space is small, skip large backdrops or oversized items. If there are existing colors, complement them.',
+    '',
     'STAGE 3 — Extract buyable items from chosen images:',
-    '- When the user confirms their inspiration images, they will be sent to you as vision input.',
+    '- When the user confirms their inspiration images (and optional space photo), they will be sent to you as vision input.',
     '- Switch to your EXTRACTION AGENT role (see below) and analyze the images.',
+    '- If a space photo was included, factor in the actual venue when deciding what items to recommend and what to filter out.',
     '- Call show_extracted_items with the categorized results.',
     '- After extraction, respond briefly while the user reviews items. The frontend handles product search after the user confirms which items they want — do NOT search for products yourself.',
     '',
@@ -534,7 +541,6 @@
     confirmBtn.textContent = 'Confirm Selection (0)';
     confirmBtn.disabled = true;
     confirmBtn.addEventListener('click', () => {
-      // Disable the grid
       confirmBtn.disabled = true;
       confirmBtn.textContent = 'Selection confirmed!';
       grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
@@ -543,7 +549,7 @@
           c.classList.add('dimmed');
         }
       });
-      handleMultiPinterestSelection(Array.from(selectedPins.values()));
+      showSpaceUploadStep(Array.from(selectedPins.values()));
     });
 
     confirmContainer.appendChild(confirmBtn);
@@ -553,12 +559,105 @@
     scrollChatToBottom();
   }
 
+  // Show "Upload your space" step after inspiration selection
+  function showSpaceUploadStep(selectedPins) {
+    const msg = document.createElement('div');
+    msg.className = 'chat-message assistant';
+    msg.style.maxWidth = '100%';
+
+    const heading = document.createElement('div');
+    heading.className = 'space-upload-heading';
+    heading.innerHTML = '<strong>Now, show us your space!</strong><br>Upload a photo of your venue or area so we can tailor recommendations to fit. Or skip if you don\'t have one handy.';
+    msg.appendChild(heading);
+
+    const uploadArea = document.createElement('div');
+    uploadArea.className = 'space-upload-area';
+    uploadArea.innerHTML = '<div class="space-upload-icon">+</div><div class="space-upload-text">Tap to upload a photo of your space</div>';
+
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'image/*';
+    fileInput.style.display = 'none';
+
+    const previewContainer = document.createElement('div');
+    previewContainer.className = 'space-upload-preview hidden';
+
+    let spaceImageData = null;
+
+    uploadArea.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.min(img.width, 1024);
+          canvas.height = Math.round(img.height * (canvas.width / img.width));
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+          if (match) {
+            spaceImageData = { mediaType: match[1], data: match[2] };
+            previewContainer.innerHTML = '';
+            const previewImg = document.createElement('img');
+            previewImg.src = dataUrl;
+            previewContainer.appendChild(previewImg);
+            previewContainer.classList.remove('hidden');
+            uploadArea.classList.add('hidden');
+            analyzeBtn.textContent = 'Analyze with my space';
+          }
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    msg.appendChild(uploadArea);
+    msg.appendChild(fileInput);
+    msg.appendChild(previewContainer);
+
+    const actions = document.createElement('div');
+    actions.className = 'space-upload-actions';
+
+    const skipBtn = document.createElement('button');
+    skipBtn.className = 'btn btn-secondary';
+    skipBtn.textContent = 'Skip — no space photo';
+    skipBtn.addEventListener('click', () => {
+      skipBtn.disabled = true;
+      analyzeBtn.disabled = true;
+      uploadArea.style.pointerEvents = 'none';
+      handleMultiPinterestSelection(selectedPins, null);
+    });
+
+    const analyzeBtn = document.createElement('button');
+    analyzeBtn.className = 'btn btn-primary';
+    analyzeBtn.textContent = 'Analyze inspiration';
+    analyzeBtn.addEventListener('click', () => {
+      skipBtn.disabled = true;
+      analyzeBtn.disabled = true;
+      uploadArea.style.pointerEvents = 'none';
+      handleMultiPinterestSelection(selectedPins, spaceImageData);
+    });
+
+    actions.appendChild(skipBtn);
+    actions.appendChild(analyzeBtn);
+    msg.appendChild(actions);
+
+    chatMessages.appendChild(msg);
+    scrollChatToBottom();
+  }
+
   // When user confirms their Pinterest image selections, feed them back to Claude as vision input
-  async function handleMultiPinterestSelection(pins) {
+  async function handleMultiPinterestSelection(pins, spaceImage) {
     const state = data.plannerState;
     if (!state || !state.apiMessages) return;
 
-    addChatMessage('user', `I picked ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}! Please analyze and extract the items.`);
+    const hasSpace = !!spaceImage;
+    addChatMessage('user', `I picked ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}!${hasSpace ? ' I also uploaded a photo of my space.' : ''} Please analyze and extract the items.`);
 
     // Convert all images to base64 JPEG
     const imageBlocks = [];
@@ -593,9 +692,21 @@
     }
 
     const contentBlocks = [...imageBlocks];
+
+    if (spaceImage) {
+      contentBlocks.push({
+        type: 'image',
+        source: { type: 'base64', media_type: spaceImage.mediaType, data: spaceImage.data },
+      });
+    }
+
+    const spaceContext = spaceImage
+      ? ' The LAST image is a photo of my actual venue/space. Factor in the space when making recommendations — consider the size, existing furniture, lighting, colors, and layout. Only suggest items that make sense for this specific space. If the space is small, skip large items. If there are existing colors/features, complement them.'
+      : '';
+
     contentBlocks.push({
       type: 'text',
-      text: `I selected ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}. Switch to your Extraction Agent role: analyze ALL images, categorize items into Essentials (consumables, must-haves), Statement Pieces (3-5 theme-defining items), and Environment (items to filter out). Call show_extracted_items with the categorized results.`,
+      text: `I selected ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}.${spaceContext} Switch to your Extraction Agent role: analyze ALL images, categorize items into Essentials (consumables, must-haves), Statement Pieces (3-5 theme-defining items), and Environment (items to filter out). Call show_extracted_items with the categorized results.`,
     });
 
     state.apiMessages.push({ role: 'user', content: contentBlocks });
