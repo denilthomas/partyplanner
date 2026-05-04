@@ -1756,10 +1756,10 @@ footer {
   padding-top: 4px;
 }
 
-/* ── Extraction Sections ── */
+/* ── Extraction Sections (Bucket-based) ── */
 
 .extraction-section {
-  margin-bottom: 16px;
+  margin-bottom: 10px;
   border-radius: 10px;
   overflow: hidden;
   border: 1px solid #e8e8e8;
@@ -1768,41 +1768,33 @@ footer {
 .extraction-section-header {
   display: flex;
   align-items: baseline;
+  justify-content: space-between;
   gap: 8px;
-  padding: 10px 14px;
-  border-bottom: 1px solid #e8e8e8;
-}
-
-.section-essentials .extraction-section-header {
-  background: linear-gradient(135deg, #dfe6e9, #b2bec3);
-}
-
-.section-statements .extraction-section-header {
-  background: linear-gradient(135deg, #a29bfe, #6c5ce7);
-}
-
-.section-statements .extraction-section-title,
-.section-statements .extraction-section-subtitle {
-  color: white;
+  padding: 8px 14px;
 }
 
 .extraction-section-title {
   font-weight: 700;
-  font-size: 0.95rem;
-  color: #2d3436;
+  font-size: 0.9rem;
 }
 
 .extraction-section-subtitle {
-  font-size: 0.8rem;
-  color: #636e72;
+  font-size: 0.75rem;
   font-weight: 400;
 }
 
-.extracted-item-reason {
-  font-size: 0.78rem;
-  color: #888;
-  font-style: italic;
-  line-height: 1.3;
+.extracted-item-thumb {
+  width: 52px;
+  height: 52px;
+  border-radius: 8px;
+  flex-shrink: 0;
+  background-color: #f0f0f0;
+  background-repeat: no-repeat;
+  border: 1px solid rgba(0,0,0,0.08);
+}
+
+.extracted-item-thumb-empty {
+  background: linear-gradient(135deg, #f0f0ff, #e8e8f0);
 }
 
 .extraction-ignored {

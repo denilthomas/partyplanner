@@ -105,10 +105,16 @@
     'EXTRACTION AGENT ROLE:',
     'You are an expert AI Party Stylist and Sourcing Specialist. Your goal is to look at party inspiration images and extract "Buyable" elements that a host needs to recreate this look on a realistic budget.',
     '',
-    'CATEGORY DEFINITIONS:',
-    '1. Essentials (High Priority): Consumables and "must-haves" like plates, napkins, balloons, streamers, cutlery, table liners. Affordable, found in bulk kits.',
-    '2. Statement Pieces (Medium Priority): Items that define the theme\'s "look" — specific backdrops, unique cake toppers, themed banners. Limit to 3-5 high-impact items.',
-    '3. Environment (FILTER OUT): Ignore furniture (chairs, tables), permanent fixtures (flooring, custom lighting), food items (cakes, cupcakes), or anything likely to cost >$100.',
+    'FUNCTIONAL BUCKETS (Planner\'s Mental Model):',
+    '1. tabletop — Plates, napkins, cutlery, table runners, glassware, charger plates.',
+    '2. wall_backdrop — Banners, balloon arches, backdrops, wall-mounted decor, garlands.',
+    '3. accent_decor — Centerpieces, candles, smaller themed props, confetti, vases.',
+    '4. activity_favors — Party hats, favor bags, craft kits, games, photo booth props.',
+    '5. food_display — Cake stands, tiered trays, themed treat boxes, cupcake towers, candy jars.',
+    '',
+    'FILTER OUT: Furniture (chairs, tables), permanent fixtures (flooring, custom lighting), food items (cakes, cupcakes), or anything likely to cost >$100.',
+    '',
+    'BOUNDING BOXES: For EVERY extracted item, return a bounding box [ymin, xmin, ymax, xmax] with coordinates normalized to 0-1000 (where 0,0 is top-left and 1000,1000 is bottom-right of the image). Also specify which image the item was found in (image_index, 0-based). These bounding boxes will be used to show visual thumbnail crops to the user.',
     '',
     'EXTRACTION CONSTRAINTS:',
     '- Focus on items available at major retailers (Amazon, Walmart, Target, Michaels, Hobby Lobby, Etsy).',
@@ -141,48 +147,40 @@
     },
     {
       name: 'show_extracted_items',
-      description: 'Display categorized items extracted from inspiration images. Essentials are must-have consumables, Statement Pieces are high-impact theme items, and Environment items are filtered out (furniture, food, fixtures).',
+      description: 'Display items extracted from inspiration images, organized by functional bucket. Each item includes a bounding box for visual thumbnail cropping.',
       input_schema: {
         type: 'object',
         properties: {
           theme_name: { type: 'string', description: 'Detected theme name (e.g. "Rustic Garden Party", "Firetruck Birthday")' },
-          essentials: {
+          items: {
             type: 'array',
-            description: 'High-priority consumables and must-haves (plates, napkins, balloons, streamers, cutlery, table liners)',
+            description: 'All extracted buyable items with bounding boxes',
             items: {
               type: 'object',
               properties: {
-                item: { type: 'string', description: 'Display name of the item' },
-                search_query: { type: 'string', description: 'Specific retailer search query' },
-                reason: { type: 'string', description: 'Why this item is essential for the look' },
+                item_name: { type: 'string', description: 'Display name of the item' },
+                bucket: { type: 'string', enum: ['tabletop', 'wall_backdrop', 'accent_decor', 'activity_favors', 'food_display'], description: 'Functional bucket' },
+                search_query: { type: 'string', description: 'Specific retailer search query to find this item' },
                 estimated_price: { type: 'string', description: 'Price estimate (e.g. "$12-15")' },
-                category: { type: 'string', enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking', 'lighting', 'florals'], description: 'Category for bucket organization' },
+                bbox: {
+                  type: 'array',
+                  description: 'Bounding box [ymin, xmin, ymax, xmax] normalized 0-1000',
+                  items: { type: 'number' },
+                  minItems: 4,
+                  maxItems: 4,
+                },
+                image_index: { type: 'number', description: 'Which inspiration image this item was found in (0-based index)' },
               },
-              required: ['item', 'search_query', 'reason', 'estimated_price', 'category'],
-            },
-          },
-          statement_pieces: {
-            type: 'array',
-            description: 'Medium-priority theme-defining items (backdrops, banners, unique toppers). Limit to 3-5.',
-            items: {
-              type: 'object',
-              properties: {
-                item: { type: 'string', description: 'Display name of the item' },
-                search_query: { type: 'string', description: 'Specific retailer search query' },
-                reason: { type: 'string', description: 'Why this piece makes a statement' },
-                estimated_price: { type: 'string', description: 'Price estimate (e.g. "$20-30")' },
-                category: { type: 'string', enum: ['decorations', 'tableware', 'entertainment', 'favors', 'stationery', 'accessories', 'baking', 'lighting', 'florals'], description: 'Category for bucket organization' },
-              },
-              required: ['item', 'search_query', 'reason', 'estimated_price', 'category'],
+              required: ['item_name', 'bucket', 'search_query', 'estimated_price', 'bbox', 'image_index'],
             },
           },
           ignored_items: {
             type: 'array',
-            description: 'Environment items filtered out (furniture, food, fixtures, items >$100)',
+            description: 'Items filtered out (furniture, food, fixtures, items >$100)',
             items: { type: 'string' },
           },
         },
-        required: ['theme_name', 'essentials', 'statement_pieces', 'ignored_items'],
+        required: ['theme_name', 'items', 'ignored_items'],
       },
     },
     {
@@ -303,14 +301,15 @@
 
     if (tool.name === 'show_extracted_items') {
       const inp = tool.input || {};
-      addExtractedItemsChecklist(inp);
-      const essCount = (inp.essentials || []).length;
-      const stmtCount = (inp.statement_pieces || []).length;
+      const imageUrls = (state.inspirationImageUrls || []);
+      addExtractedItemsChecklist(inp, imageUrls);
+      const itemCount = (inp.items || []).length;
       const ignCount = (inp.ignored_items || []).length;
+      const buckets = [...new Set((inp.items || []).map(it => it.bucket))];
       return {
         type: 'tool_result',
         tool_use_id: tool.id,
-        content: `Displayed extraction results for "${inp.theme_name || 'party'}": ${essCount} essentials, ${stmtCount} statement pieces, ${ignCount} items filtered out. The user is reviewing which items to keep. Wait for their confirmation.`,
+        content: `Displayed ${itemCount} items across buckets [${buckets.join(', ')}] for "${inp.theme_name || 'party'}". ${ignCount} items filtered out. The user is reviewing which items to keep. Wait for their confirmation.`,
       };
     }
 
@@ -656,6 +655,9 @@
     const state = data.plannerState;
     if (!state || !state.apiMessages) return;
 
+    // Store inspiration image URLs for bbox thumbnail cropping later
+    state.inspirationImageUrls = pins.map(p => p.image_url);
+
     const hasSpace = !!spaceImage;
     addChatMessage('user', `I picked ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}!${hasSpace ? ' I also uploaded a photo of my space.' : ''} Please analyze and extract the items.`);
 
@@ -706,7 +708,7 @@
 
     contentBlocks.push({
       type: 'text',
-      text: `I selected ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}.${spaceContext} Switch to your Extraction Agent role: analyze ALL images, categorize items into Essentials (consumables, must-haves), Statement Pieces (3-5 theme-defining items), and Environment (items to filter out). Call show_extracted_items with the categorized results.`,
+      text: `I selected ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}.${spaceContext} Switch to your Extraction Agent role: analyze ALL images. For every buyable item you find, assign it to a functional bucket (tabletop, wall_backdrop, accent_decor, activity_favors, food_display) and provide a bounding box [ymin, xmin, ymax, xmax] normalized to 0-1000 plus the image_index (0-based). Filter out furniture, food, fixtures, and items over $100. Call show_extracted_items with the results.`,
     });
 
     state.apiMessages.push({ role: 'user', content: contentBlocks });
@@ -714,12 +716,44 @@
     sendToLLM();
   }
 
+  const BUCKET_META = {
+    tabletop:        { label: 'Tabletop',          icon: '\u{1F37D}', color: '#6c5ce7' },
+    wall_backdrop:   { label: 'Wall & Backdrop',    icon: '\u{1F3A8}', color: '#e17055' },
+    accent_decor:    { label: 'Accent Decor',       icon: '\u{1F56F}', color: '#00b894' },
+    activity_favors: { label: 'Activity & Favors',  icon: '\u{1F381}', color: '#fdcb6e' },
+    food_display:    { label: 'Food Display',       icon: '\u{1F382}', color: '#0984e3' },
+  };
+
+  function buildBboxThumbnailStyle(imageUrl, bbox) {
+    if (!imageUrl || !bbox || bbox.length < 4) return '';
+    const [ymin, xmin, ymax, xmax] = bbox;
+    const bw = Math.max(xmax - xmin, 1);
+    const bh = Math.max(ymax - ymin, 1);
+    const bgSizeX = (1000 / bw) * 100;
+    const bgSizeY = (1000 / bh) * 100;
+    const bgPosX = (xmin / (1000 - bw)) * 100 || 0;
+    const bgPosY = (ymin / (1000 - bh)) * 100 || 0;
+    return `background-image: url('${imageUrl}'); background-size: ${bgSizeX.toFixed(1)}% ${bgSizeY.toFixed(1)}%; background-position: ${bgPosX.toFixed(1)}% ${bgPosY.toFixed(1)}%;`;
+  }
+
   // Render extracted items as an editable checklist in chat
-  function addExtractedItemsChecklist(extraction) {
-    const essentials = (extraction.essentials || []).map((it, i) => ({ ...it, _key: 'e' + i, name: it.item, search_query: it.search_query }));
-    const statements = (extraction.statement_pieces || []).map((it, i) => ({ ...it, _key: 's' + i, name: it.item, search_query: it.search_query }));
+  function addExtractedItemsChecklist(extraction, imageUrls) {
+    const rawItems = (extraction.items || []).map((it, i) => ({
+      ...it,
+      _key: 'item_' + i,
+      name: it.item_name,
+      search_query: it.search_query,
+    }));
     const ignored = extraction.ignored_items || [];
-    const allItems = [...essentials, ...statements];
+
+    // Group items by bucket
+    const bucketOrder = ['tabletop', 'wall_backdrop', 'accent_decor', 'activity_favors', 'food_display'];
+    const grouped = {};
+    for (const item of rawItems) {
+      const b = item.bucket || 'accent_decor';
+      if (!grouped[b]) grouped[b] = [];
+      grouped[b].push(item);
+    }
 
     const msg = document.createElement('div');
     msg.className = 'chat-message assistant';
@@ -730,30 +764,37 @@
     heading.innerHTML = '<strong>' + escapeHtml(extraction.theme_name || 'Your Party') + '</strong><br>Uncheck anything you don\'t need, then click "Find Products".';
     msg.appendChild(heading);
 
-    const checkedKeys = new Set(allItems.map(it => it._key));
+    const checkedKeys = new Set(rawItems.map(it => it._key));
 
-    function renderSection(title, subtitle, items, cssClass) {
+    for (const bucket of bucketOrder) {
+      const items = grouped[bucket];
+      if (!items || items.length === 0) continue;
+
+      const meta = BUCKET_META[bucket] || { label: bucket, icon: '', color: '#636e72' };
+
       const section = document.createElement('div');
-      section.className = 'extraction-section ' + cssClass;
+      section.className = 'extraction-section bucket-section';
 
       const header = document.createElement('div');
       header.className = 'extraction-section-header';
-      header.innerHTML = '<span class="extraction-section-title">' + escapeHtml(title) + '</span><span class="extraction-section-subtitle">' + escapeHtml(subtitle) + '</span>';
+      header.style.background = meta.color;
+      header.innerHTML = '<span class="extraction-section-title" style="color:white">' + meta.icon + ' ' + escapeHtml(meta.label) + '</span><span class="extraction-section-subtitle" style="color:rgba(255,255,255,0.8)">' + items.length + ' item' + (items.length > 1 ? 's' : '') + '</span>';
       section.appendChild(header);
 
       const list = document.createElement('div');
       list.className = 'extracted-items-list';
 
       items.forEach(item => {
-        const catStyle = getCategoryStyle(item.category);
+        const imgUrl = imageUrls[item.image_index] || imageUrls[0] || '';
+        const thumbStyle = buildBboxThumbnailStyle(imgUrl, item.bbox);
+
         const row = document.createElement('div');
         row.className = 'extracted-item-row';
         row.innerHTML = '<label class="extracted-item-label">' +
           '<input type="checkbox" checked class="extracted-item-check" data-key="' + item._key + '">' +
-          '<div class="extracted-item-swatch" style="background: ' + catStyle.gradient + '"></div>' +
+          (thumbStyle ? '<div class="extracted-item-thumb" style="' + thumbStyle + '"></div>' : '<div class="extracted-item-thumb extracted-item-thumb-empty"></div>') +
           '<div class="extracted-item-info">' +
             '<span class="extracted-item-name">' + escapeHtml(item.name) + '</span>' +
-            '<span class="extracted-item-reason">' + escapeHtml(item.reason || '') + '</span>' +
             '<span class="extracted-item-meta">' + escapeHtml(item.estimated_price || '') + '</span>' +
           '</div>' +
         '</label>';
@@ -769,14 +810,7 @@
       });
 
       section.appendChild(list);
-      return section;
-    }
-
-    if (essentials.length > 0) {
-      msg.appendChild(renderSection('Essentials', 'Must-have consumables', essentials, 'section-essentials'));
-    }
-    if (statements.length > 0) {
-      msg.appendChild(renderSection('Statement Pieces', 'Theme-defining items', statements, 'section-statements'));
+      msg.appendChild(section);
     }
 
     if (ignored.length > 0) {
@@ -792,7 +826,7 @@
     confirmBtn.className = 'btn btn-primary checklist-confirm-btn';
     confirmBtn.textContent = 'Find Products (' + checkedKeys.size + ')';
     confirmBtn.addEventListener('click', () => {
-      const confirmed = allItems.filter(it => checkedKeys.has(it._key));
+      const confirmed = rawItems.filter(it => checkedKeys.has(it._key));
       confirmBtn.disabled = true;
       confirmBtn.textContent = 'Searching products...';
       msg.querySelectorAll('input').forEach(cb => { cb.disabled = true; });
