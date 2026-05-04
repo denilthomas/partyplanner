@@ -8,6 +8,7 @@
     "test": "echo \"Tests passed\""
   },
   "dependencies": {
+    "@omnixhq/ucp-client": "^3.0.0",
     "express": "^4.21.0",
     "puppeteer": "^24.41.0"
   },

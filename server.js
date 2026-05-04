@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const { searchPinterest, closeBrowser: closePinterest } = require('./mcp-servers/pinterest-scraper');
 const { searchProducts } = require('./mcp-servers/product-scraper');
+const { buildCheckoutPlan, createUCPCheckout, completeUCPCheckout } = require('./mcp-servers/ucp-checkout');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -67,6 +68,36 @@ app.post('/api/search-products', async (req, res) => {
     console.error('[products] search failed:', err.message);
     res.status(500).json({ error: 'Product search failed', detail: err.message, products: [] });
   }
+});
+
+// ── UCP Checkout: Build checkout plan (groups items by retailer) ──
+app.post('/api/checkout/plan', (req, res) => {
+  const { items } = req.body || {};
+  if (!items || !Array.isArray(items)) {
+    return res.status(400).json({ error: 'items array required' });
+  }
+  const plan = buildCheckoutPlan(items);
+  res.json(plan);
+});
+
+// ── UCP Checkout: Create session with a retailer ──
+app.post('/api/checkout/create', async (req, res) => {
+  const { retailerKey, items, buyerInfo } = req.body || {};
+  if (!retailerKey || !items) {
+    return res.status(400).json({ error: 'retailerKey and items required' });
+  }
+  const result = await createUCPCheckout(retailerKey, items, buyerInfo);
+  res.json(result);
+});
+
+// ── UCP Checkout: Complete session with payment ──
+app.post('/api/checkout/complete', async (req, res) => {
+  const { retailerKey, sessionId, paymentToken } = req.body || {};
+  if (!retailerKey || !sessionId || !paymentToken) {
+    return res.status(400).json({ error: 'retailerKey, sessionId, and paymentToken required' });
+  }
+  const result = await completeUCPCheckout(retailerKey, sessionId, paymentToken);
+  res.json(result);
 });
 
 // ── Graceful shutdown ──

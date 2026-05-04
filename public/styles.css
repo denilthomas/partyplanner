@@ -1820,6 +1820,118 @@ footer {
   color: #636e72;
 }
 
+/* ── UCP Checkout ── */
+
+.checkout-retailers {
+  padding: 0.5rem 1rem;
+  max-height: 250px;
+  overflow-y: auto;
+}
+
+.checkout-retailer-group {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 8px;
+  overflow: hidden;
+}
+
+.checkout-retailer-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #f8f9fa;
+  font-size: 0.9rem;
+}
+
+.checkout-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.checkout-badge.ucp {
+  background: #00b894;
+  color: white;
+}
+
+.checkout-badge.amazon {
+  background: #ff9900;
+  color: white;
+}
+
+.checkout-badge.other {
+  background: var(--secondary);
+  color: white;
+}
+
+.checkout-retailer-items {
+  padding: 4px 12px;
+}
+
+.checkout-retailer-subtotal {
+  padding: 6px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--primary);
+  text-align: right;
+  border-top: 1px solid var(--border);
+  background: #fafafa;
+}
+
+.stripe-card-element {
+  padding: 10px 12px;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: white;
+  transition: border-color 0.2s;
+}
+
+.stripe-card-element:focus-within {
+  border-color: var(--primary);
+}
+
+.stripe-card-errors {
+  color: var(--danger);
+  font-size: 0.8rem;
+  margin-top: 4px;
+  min-height: 1.2em;
+}
+
+.checkout-result-item {
+  padding: 10px 0;
+  border-bottom: 1px solid #eee;
+  font-size: 0.9rem;
+}
+
+.checkout-result-item:last-of-type {
+  border-bottom: none;
+}
+
+.checkout-result-success {
+  color: var(--success);
+}
+
+.checkout-result-cart {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.checkout-result-fallback {
+  color: var(--text-light);
+}
+
+.checkout-fallback-links {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+
 /* ── Utility ── */
 
 .hidden {

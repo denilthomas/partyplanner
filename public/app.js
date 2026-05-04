@@ -2813,20 +2813,35 @@
 
   // ── Unified Checkout ──
 
+  // ── UCP-Powered Checkout ──
+
+  let stripeInstance = null;
+  let stripeCardElement = null;
+  let checkoutPlan = null;
+
+  function getStripe() {
+    if (!stripeInstance && window.Stripe) {
+      const stripeKey = localStorage.getItem('partyplanner_stripe_pk') || 'pk_test_placeholder';
+      stripeInstance = window.Stripe(stripeKey);
+    }
+    return stripeInstance;
+  }
+
   function initCheckout() {
     const checkoutBtn = document.getElementById('bucket-checkout-btn');
     const checkoutPanel = document.getElementById('checkout-panel');
-    const checkoutForm = document.getElementById('checkout-form');
     const backBtn = document.getElementById('checkout-back-btn');
+    const placeOrderBtn = document.getElementById('checkout-place-order-btn');
 
     if (!checkoutBtn) return;
 
-    checkoutBtn.addEventListener('click', () => {
+    checkoutBtn.addEventListener('click', async () => {
       if (data.partyBucket.length === 0) return;
       document.getElementById('bucket-items').classList.add('hidden');
       document.getElementById('bucket-footer').classList.add('hidden');
       checkoutPanel.classList.remove('hidden');
-      renderCheckoutSummary();
+      await renderCheckoutSummary();
+      initStripeElements();
     });
 
     backBtn.addEventListener('click', () => {
@@ -2835,61 +2850,229 @@
       document.getElementById('bucket-footer').classList.remove('hidden');
     });
 
-    checkoutForm.addEventListener('submit', (e) => {
-      e.preventDefault();
-      const formData = {
-        name: document.getElementById('checkout-name').value.trim(),
-        email: document.getElementById('checkout-email').value.trim(),
-        address: document.getElementById('checkout-address').value.trim(),
-        card: document.getElementById('checkout-card').value.trim(),
-        expiry: document.getElementById('checkout-expiry').value.trim(),
-        cvv: document.getElementById('checkout-cvv').value.trim(),
-      };
+    placeOrderBtn.addEventListener('click', () => handlePlaceOrder());
+  }
 
-      // Simulate order placement
-      checkoutPanel.innerHTML = `
-        <div class="checkout-success">
-          <div class="checkout-success-icon">&#x2714;</div>
-          <h4>Order Placed!</h4>
-          <p>Your party supplies are on the way to <strong>${escapeHtml(formData.name)}</strong>.</p>
-          <p class="checkout-success-detail">Confirmation sent to <strong>${escapeHtml(formData.email)}</strong></p>
-          <p class="checkout-success-detail">${data.partyBucket.length} items — ${formatCurrency(getBucketTotal())}</p>
-          <button class="btn btn-primary" id="checkout-done-btn">Done</button>
-        </div>
-      `;
-      document.getElementById('checkout-done-btn').addEventListener('click', () => {
-        data.partyBucket = [];
-        saveData(data);
-        updateBucketUI();
-        checkoutPanel.classList.add('hidden');
-        checkoutPanel.innerHTML = '';
-        document.getElementById('bucket-items').classList.remove('hidden');
-        document.getElementById('bucket-footer').classList.remove('hidden');
-        toggleBucketPanel();
-      });
+  function initStripeElements() {
+    const stripe = getStripe();
+    if (!stripe || stripeCardElement) return;
+
+    const elements = stripe.elements();
+    stripeCardElement = elements.create('card', {
+      style: {
+        base: {
+          fontSize: '16px',
+          color: '#2d3436',
+          '::placeholder': { color: '#aab7c4' },
+        },
+      },
+    });
+    stripeCardElement.mount('#stripe-card-element');
+    stripeCardElement.on('change', (event) => {
+      const errEl = document.getElementById('stripe-card-errors');
+      errEl.textContent = event.error ? event.error.message : '';
     });
   }
 
-  function renderCheckoutSummary() {
-    const el = document.getElementById('checkout-summary');
-    if (!el) return;
+  async function renderCheckoutSummary() {
+    const summaryEl = document.getElementById('checkout-summary');
+    const retailersEl = document.getElementById('checkout-retailers');
+    if (!summaryEl) return;
+
+    summaryEl.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+
+    try {
+      const res = await fetch('/api/checkout/plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: data.partyBucket }),
+      });
+      checkoutPlan = await res.json();
+    } catch (err) {
+      checkoutPlan = { retailers: [], unsupported: [] };
+    }
+
     const total = getBucketTotal();
-    el.innerHTML = `
-      <div class="checkout-summary-items">
-        ${data.partyBucket.map(item => {
-          const qty = item.quantity || 1;
-          return `
-          <div class="checkout-line-item">
-            <span>${escapeHtml(item.name)}${qty > 1 ? ` x${qty}` : ''}</span>
-            <span>${formatCurrency(item.price * qty)}</span>
+
+    let retailerHtml = '';
+    for (const r of (checkoutPlan.retailers || [])) {
+      const icon = r.method === 'ucp' ? '&#x1F6D2;' : '&#x1F517;';
+      const badge = r.method === 'ucp' ? '<span class="checkout-badge ucp">UCP Checkout</span>' : '<span class="checkout-badge amazon">Cart Link</span>';
+      retailerHtml += `
+        <div class="checkout-retailer-group">
+          <div class="checkout-retailer-header">
+            <span>${icon} <strong>${escapeHtml(r.name)}</strong></span>
+            ${badge}
           </div>
-        `}).join('')}
-      </div>
+          <div class="checkout-retailer-items">
+            ${r.items.map(it => {
+              const qty = it.quantity || 1;
+              return `<div class="checkout-line-item"><span>${escapeHtml(it.name)}${qty > 1 ? ' x' + qty : ''}</span><span>${formatCurrency(it.price * qty)}</span></div>`;
+            }).join('')}
+          </div>
+          <div class="checkout-retailer-subtotal">Subtotal: ${formatCurrency(r.total)}</div>
+        </div>
+      `;
+    }
+
+    if ((checkoutPlan.unsupported || []).length > 0) {
+      retailerHtml += `
+        <div class="checkout-retailer-group checkout-unsupported">
+          <div class="checkout-retailer-header"><span>&#x1F517; <strong>Other</strong></span><span class="checkout-badge other">Direct Links</span></div>
+          <div class="checkout-retailer-items">
+            ${checkoutPlan.unsupported.map(it => {
+              const qty = it.quantity || 1;
+              return `<div class="checkout-line-item"><span>${escapeHtml(it.name)}</span><span>${formatCurrency(it.price * qty)}</span></div>`;
+            }).join('')}
+          </div>
+        </div>
+      `;
+    }
+
+    retailersEl.innerHTML = retailerHtml;
+
+    summaryEl.innerHTML = `
       <div class="checkout-summary-total">
-        <strong>Total</strong>
+        <strong>Total (${data.partyBucket.length} items)</strong>
         <strong>${formatCurrency(total)}</strong>
       </div>
     `;
+  }
+
+  async function handlePlaceOrder() {
+    const placeOrderBtn = document.getElementById('checkout-place-order-btn');
+    placeOrderBtn.disabled = true;
+    placeOrderBtn.textContent = 'Processing...';
+
+    const buyerInfo = {
+      firstName: (document.getElementById('checkout-name').value.trim().split(' ')[0]) || '',
+      lastName: (document.getElementById('checkout-name').value.trim().split(' ').slice(1).join(' ')) || '',
+      email: document.getElementById('checkout-email').value.trim(),
+      address: {
+        street: document.getElementById('checkout-street').value.trim(),
+        city: document.getElementById('checkout-city').value.trim(),
+        state: document.getElementById('checkout-state').value.trim(),
+        zip: document.getElementById('checkout-zip').value.trim(),
+        country: 'US',
+      },
+    };
+
+    if (!buyerInfo.email || !buyerInfo.address.street) {
+      placeOrderBtn.disabled = false;
+      placeOrderBtn.textContent = 'Place Order';
+      alert('Please fill in your name, email, and shipping address.');
+      return;
+    }
+
+    // Tokenize card via Stripe
+    let stripeToken = null;
+    const stripe = getStripe();
+    if (stripe && stripeCardElement) {
+      try {
+        const { token, error } = await stripe.createToken(stripeCardElement);
+        if (error) {
+          document.getElementById('stripe-card-errors').textContent = error.message;
+          placeOrderBtn.disabled = false;
+          placeOrderBtn.textContent = 'Place Order';
+          return;
+        }
+        stripeToken = token.id;
+      } catch (err) {
+        console.error('Stripe tokenization failed:', err);
+      }
+    }
+
+    const results = [];
+
+    for (const retailer of (checkoutPlan.retailers || [])) {
+      if (retailer.method === 'ucp') {
+        try {
+          const createRes = await fetch('/api/checkout/create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              retailerKey: retailer.key,
+              items: retailer.items,
+              buyerInfo,
+            }),
+          });
+          const session = await createRes.json();
+
+          if (session.error || session.fallback) {
+            results.push({ retailer: retailer.name, status: 'fallback', items: retailer.items, message: session.error || 'UCP unavailable' });
+            continue;
+          }
+
+          if (stripeToken && session.sessionId) {
+            const completeRes = await fetch('/api/checkout/complete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                retailerKey: retailer.key,
+                sessionId: session.sessionId,
+                paymentToken: { token: stripeToken, handlerId: 'com.stripe' },
+              }),
+            });
+            const order = await completeRes.json();
+            results.push({ retailer: retailer.name, status: order.error ? 'fallback' : 'completed', orderId: order.orderId, orderUrl: order.orderUrl, message: order.error });
+          } else {
+            results.push({ retailer: retailer.name, status: 'fallback', message: 'No payment token available' });
+          }
+        } catch (err) {
+          results.push({ retailer: retailer.name, status: 'fallback', items: retailer.items, message: err.message });
+        }
+      } else if (retailer.method === 'cart_url' && retailer.cartUrl) {
+        results.push({ retailer: retailer.name, status: 'cart_url', cartUrl: retailer.cartUrl });
+      }
+    }
+
+    showCheckoutResults(results, buyerInfo);
+  }
+
+  function showCheckoutResults(results, buyerInfo) {
+    const checkoutPanel = document.getElementById('checkout-panel');
+
+    let html = '<div class="checkout-success">';
+    html += '<div class="checkout-success-icon">&#x2714;</div>';
+    html += '<h4>Checkout Summary</h4>';
+
+    for (const r of results) {
+      if (r.status === 'completed') {
+        html += `<div class="checkout-result-item checkout-result-success">
+          <strong>${escapeHtml(r.retailer)}</strong> — Order placed!
+          ${r.orderUrl ? `<a href="${escapeHtml(r.orderUrl)}" target="_blank" class="product-result-link">View order &rarr;</a>` : ''}
+        </div>`;
+      } else if (r.status === 'cart_url') {
+        html += `<div class="checkout-result-item checkout-result-cart">
+          <strong>${escapeHtml(r.retailer)}</strong>
+          <a href="${escapeHtml(r.cartUrl)}" target="_blank" class="btn btn-primary btn-sm">Open ${escapeHtml(r.retailer)} Cart &rarr;</a>
+        </div>`;
+      } else {
+        const itemLinks = (r.items || [])
+          .filter(it => it.url)
+          .map(it => `<a href="${escapeHtml(it.url)}" target="_blank" class="product-result-link">${escapeHtml(it.name)} &rarr;</a>`)
+          .join('');
+        html += `<div class="checkout-result-item checkout-result-fallback">
+          <strong>${escapeHtml(r.retailer)}</strong> — ${escapeHtml(r.message || 'Use direct links')}
+          <div class="checkout-fallback-links">${itemLinks}</div>
+        </div>`;
+      }
+    }
+
+    html += `<p class="checkout-success-detail">${data.partyBucket.length} items — ${formatCurrency(getBucketTotal())}</p>`;
+    html += '<button class="btn btn-primary" id="checkout-done-btn">Done</button>';
+    html += '</div>';
+
+    checkoutPanel.innerHTML = html;
+
+    document.getElementById('checkout-done-btn').addEventListener('click', () => {
+      data.partyBucket = [];
+      saveData(data);
+      updateBucketUI();
+      checkoutPanel.classList.add('hidden');
+      // Rebuild the panel HTML since we replaced it
+      location.reload();
+    });
   }
 
   function refreshMoodItemCards() {
