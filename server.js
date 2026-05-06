@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
-const { searchPinterest, closeBrowser: closePinterest } = require('./mcp-servers/pinterest-scraper');
-const { searchProducts } = require('./mcp-servers/product-scraper');
+const { analyzeSpace, extractItems } = require('./mcp-servers/gemini-vision');
+const { searchInspiration, searchProducts, searchKits } = require('./mcp-servers/serper-search');
 const { buildCheckoutPlan, createUCPCheckout, completeUCPCheckout } = require('./mcp-servers/ucp-checkout');
 
 const app = express();
@@ -42,35 +42,81 @@ app.post('/api/chat', async (req, res) => {
   }
 });
 
-// ── Pinterest scraper endpoint ──
-app.post('/api/search-pinterest', async (req, res) => {
+// ── Gemini: Analyze space photo for anchor points ──
+app.post('/api/analyze-space', async (req, res) => {
+  const { image_base64, media_type = 'image/jpeg' } = req.body || {};
+  if (!image_base64) {
+    return res.status(400).json({ error: 'image_base64 required' });
+  }
+
+  try {
+    const anchors = await analyzeSpace(image_base64, media_type);
+    res.json({ anchors });
+  } catch (err) {
+    console.error('[analyze-space] failed:', err.message);
+    res.status(500).json({ error: 'Space analysis failed', detail: err.message, anchors: [] });
+  }
+});
+
+// ── Gemini: Extract items from inspiration images ──
+app.post('/api/extract-items', async (req, res) => {
+  const { images, space_anchors = [] } = req.body || {};
+  if (!images || !Array.isArray(images) || images.length === 0) {
+    return res.status(400).json({ error: 'images array required' });
+  }
+
+  try {
+    const items = await extractItems(images, space_anchors);
+    res.json({ items });
+  } catch (err) {
+    console.error('[extract-items] failed:', err.message);
+    res.status(500).json({ error: 'Item extraction failed', detail: err.message, items: [] });
+  }
+});
+
+// ── Serper: Search inspiration images ──
+app.post('/api/search-inspiration', async (req, res) => {
   const { query, max_results = 12 } = req.body || {};
   if (!query) return res.status(400).json({ error: 'query required' });
 
   try {
-    const pins = await searchPinterest(query, max_results);
-    res.json({ query, pins });
+    const images = await searchInspiration(query, max_results);
+    res.json({ query, images });
   } catch (err) {
-    console.error('[pinterest] scrape failed:', err.message);
-    res.status(500).json({ error: 'Pinterest scrape failed', detail: err.message, pins: [] });
+    console.error('[inspiration] search failed:', err.message);
+    res.status(500).json({ error: 'Inspiration search failed', detail: err.message, images: [] });
   }
 });
 
-// ── Product search endpoint (SerpApi) ──
+// ── Serper: Search products ──
 app.post('/api/search-products', async (req, res) => {
-  const { query, retailer = 'amazon', max_results = 5 } = req.body || {};
+  const { query, max_results = 5 } = req.body || {};
   if (!query) return res.status(400).json({ error: 'query required' });
 
   try {
-    const products = await searchProducts(query, retailer, max_results);
-    res.json({ query, retailer, products });
+    const products = await searchProducts(query, max_results);
+    res.json({ query, products });
   } catch (err) {
     console.error('[products] search failed:', err.message);
     res.status(500).json({ error: 'Product search failed', detail: err.message, products: [] });
   }
 });
 
-// ── UCP Checkout: Build checkout plan (groups items by retailer) ──
+// ── Serper: Search kits/bundles ──
+app.post('/api/search-kits', async (req, res) => {
+  const { query, max_results = 3 } = req.body || {};
+  if (!query) return res.status(400).json({ error: 'query required' });
+
+  try {
+    const kits = await searchKits(query, max_results);
+    res.json({ query, kits });
+  } catch (err) {
+    console.error('[kits] search failed:', err.message);
+    res.status(500).json({ error: 'Kit search failed', detail: err.message, kits: [] });
+  }
+});
+
+// ── UCP Checkout: Build checkout plan ──
 app.post('/api/checkout/plan', (req, res) => {
   const { items } = req.body || {};
   if (!items || !Array.isArray(items)) {
@@ -80,7 +126,7 @@ app.post('/api/checkout/plan', (req, res) => {
   res.json(plan);
 });
 
-// ── UCP Checkout: Create session with a retailer ──
+// ── UCP Checkout: Create session ──
 app.post('/api/checkout/create', async (req, res) => {
   const { retailerKey, items, buyerInfo } = req.body || {};
   if (!retailerKey || !items) {
@@ -90,7 +136,7 @@ app.post('/api/checkout/create', async (req, res) => {
   res.json(result);
 });
 
-// ── UCP Checkout: Complete session with payment ──
+// ── UCP Checkout: Complete session ──
 app.post('/api/checkout/complete', async (req, res) => {
   const { retailerKey, sessionId, paymentToken } = req.body || {};
   if (!retailerKey || !sessionId || !paymentToken) {
@@ -98,12 +144,6 @@ app.post('/api/checkout/complete', async (req, res) => {
   }
   const result = await completeUCPCheckout(retailerKey, sessionId, paymentToken);
   res.json(result);
-});
-
-// ── Graceful shutdown ──
-process.on('SIGTERM', async () => {
-  await closePinterest().catch(() => {});
-  process.exit(0);
 });
 
 app.listen(PORT, '0.0.0.0', () => {

@@ -1,30 +1,25 @@
-// PartyPlanner App - Core Application Logic
-// Uses localStorage for persistence, IndexedDB for images
-
 (function () {
   'use strict';
 
-  // ── Data Layer ──
+  // ══════════════════════════════════════
+  //  DATA LAYER
+  // ══════════════════════════════════════
 
   function loadData() {
     const defaults = {
-      guests: [],
-      expenses: [],
-      budgetLimit: 0,
       partyBucket: [],
-      moodBoardItems: [],
-      plannerState: null,
       chatHistory: [],
-      uploadedImages: [],
+      spacePhoto: null,
+      anchors: [],
+      extractedItems: [],
+      themeName: '',
+      inspirationUrls: [],
     };
     try {
       const raw = localStorage.getItem('partyplanner');
       if (!raw) return defaults;
-      const parsed = JSON.parse(raw);
-      return { ...defaults, ...parsed };
-    } catch {
-      return defaults;
-    }
+      return { ...defaults, ...JSON.parse(raw) };
+    } catch { return defaults; }
   }
 
   function saveData(d) {
@@ -37,684 +32,72 @@
 
   let data = loadData();
 
-  // ── Settings (API Keys) ──
-
-  function getApiKey() {
-    return localStorage.getItem('partyplanner_openai_key') || '';
-  }
-
-  function saveApiKey(key) {
-    if (key) localStorage.setItem('partyplanner_openai_key', key);
-    else localStorage.removeItem('partyplanner_openai_key');
-  }
-
-  function isLLMMode() {
-    return true; // Always use LLM — backend holds the API key
-  }
-
-  const settingsBtn = document.getElementById('settings-btn');
-  const settingsForm = document.getElementById('settings-form');
-  const openaiKeyInput = document.getElementById('openai-key');
-
-  settingsBtn.addEventListener('click', () => {
-    openaiKeyInput.value = getApiKey();
-    openModal('settings-modal');
-  });
-
-  settingsForm.addEventListener('submit', (e) => {
-    e.preventDefault();
-    saveApiKey(openaiKeyInput.value.trim());
-    closeModal('settings-modal');
-  });
-
   // ══════════════════════════════════════
-  //  Claude — LLM Party Planner
+  //  STATE
   // ══════════════════════════════════════
 
-  const PLANNER_SYSTEM = [
-    'You are a friendly, knowledgeable AI Party Planning Agent built into the PartyPlanner app.',
-    'You orchestrate a multi-stage pipeline: gather preferences → fetch Pinterest inspiration → user picks images → extract items → user confirms items → frontend searches products → user picks products → add to bucket.',
-    '',
-    'PIPELINE FLOW:',
-    '',
-    'STAGE 1 — Gather info (briefly, not all at once):',
-    '- Party type and theme/style',
-    '- Approximate guest count',
-    '- Budget range',
-    'Once you have party type + one other detail, move to Stage 2.',
-    '',
-    'STAGE 2 — Fetch Pinterest inspiration:',
-    '- Call search_pinterest_inspiration with a descriptive query matching their vision',
-    '- Example queries: "bohemian garden tea party decor", "moana birthday party kids", "rose gold elegant wedding"',
-    '- The app displays the returned images as a selectable grid. The user can pick UP TO 3 inspiration images, then confirms their selection.',
-    '- Wait for the user to confirm, or respond to refinement requests like "more rustic" / "less pink" by calling search_pinterest_inspiration again with refined query.',
-    '',
-    'STAGE 2.5 — Space photo (optional):',
-    '- After picking inspiration images, the user may upload a photo of their actual venue/space.',
-    '- If provided, the space photo will be the LAST image in the vision input.',
-    '- Use it to tailor your recommendations: consider size, layout, existing colors, furniture, and lighting.',
-    '- If the space is small, skip large backdrops or oversized items. If there are existing colors, complement them.',
-    '',
-    'STAGE 3 — Extract buyable items from chosen images:',
-    '- When the user confirms their inspiration images (and optional space photo), they will be sent to you as vision input.',
-    '- Switch to your EXTRACTION AGENT role (see below) and analyze the images.',
-    '- If a space photo was included, factor in the actual venue when deciding what items to recommend and what to filter out.',
-    '- Call show_extracted_items with the categorized results.',
-    '- After extraction, respond briefly while the user reviews items. The frontend handles product search after the user confirms which items they want — do NOT search for products yourself.',
-    '',
-    'EXTRACTION AGENT ROLE:',
-    'You are an expert AI Party Stylist and Sourcing Specialist. Your goal is to look at party inspiration images and extract "Buyable" elements that a host needs to recreate this look on a realistic budget.',
-    '',
-    'FUNCTIONAL BUCKETS (Planner\'s Mental Model):',
-    '1. tabletop — Plates, napkins, cutlery, table runners, glassware, charger plates.',
-    '2. wall_backdrop — Banners, balloon arches, backdrops, wall-mounted decor, garlands.',
-    '3. accent_decor — Centerpieces, candles, smaller themed props, confetti, vases.',
-    '4. activity_favors — Party hats, favor bags, craft kits, games, photo booth props.',
-    '5. food_display — Cake stands, tiered trays, themed treat boxes, cupcake towers, candy jars.',
-    '',
-    'FILTER OUT: Furniture (chairs, tables), permanent fixtures (flooring, custom lighting), food items (cakes, cupcakes), or anything likely to cost >$100.',
-    '',
-    'BOUNDING BOXES: For EVERY extracted item, return a bounding box [ymin, xmin, ymax, xmax] with coordinates normalized to 0-1000 (where 0,0 is top-left and 1000,1000 is bottom-right of the image). Also specify which image the item was found in (image_index, 0-based). These bounding boxes will be used to show visual thumbnail crops to the user.',
-    '',
-    'EXTRACTION CONSTRAINTS:',
-    '- Focus on items available at major retailers (Amazon, Walmart, Target, Michaels, Hobby Lobby, Etsy).',
-    '- Group similar items (e.g. "Firetruck plates and napkins") to keep the list concise.',
-    '- Provide a specific search query for each item that would find it on a retailer website.',
-    '',
-    'ONGOING:',
-    '- If user asks to add, remove, or change items later, call update_party_bucket.',
-    '- If user wants different inspiration, call search_pinterest_inspiration again.',
-    '- Keep responses concise: 1-3 sentences. Be warm and enthusiastic.',
-    '- React to what the user actually says. Do not repeat questions already answered.',
-    '',
-    'WHEN USER UPLOADS OWN IMAGES (not from Pinterest): skip Stage 2, go straight to Stage 3 analysis.',
-  ].join('\n');
-
-  const PLANNER_TOOLS = [
-    {
-      name: 'search_pinterest_inspiration',
-      description: 'Fetch a grid of real inspiration images from Pinterest for the user to choose from. Call this once you know the party type and theme. Also call when the user wants refined/different inspiration (e.g. "more rustic", "less pink").',
-      input_schema: {
-        type: 'object',
-        properties: {
-          query: { type: 'string', description: 'Descriptive Pinterest search query (e.g. "bohemian garden tea party decor", "rose gold elegant wedding table")' },
-          party_type: { type: 'string', description: 'The type of party' },
-          theme: { type: 'string', description: 'Theme or style' },
-          max_results: { type: 'number', description: 'Number of images to return (default 12)' },
-        },
-        required: ['query'],
-      },
-    },
-    {
-      name: 'show_extracted_items',
-      description: 'Display items extracted from inspiration images, organized by functional bucket. Each item includes a bounding box for visual thumbnail cropping.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          theme_name: { type: 'string', description: 'Detected theme name (e.g. "Rustic Garden Party", "Firetruck Birthday")' },
-          items: {
-            type: 'array',
-            description: 'All extracted buyable items with bounding boxes',
-            items: {
-              type: 'object',
-              properties: {
-                item_name: { type: 'string', description: 'Display name of the item' },
-                bucket: { type: 'string', enum: ['tabletop', 'wall_backdrop', 'accent_decor', 'activity_favors', 'food_display'], description: 'Functional bucket' },
-                search_query: { type: 'string', description: 'Specific retailer search query to find this item' },
-                estimated_price: { type: 'string', description: 'Price estimate (e.g. "$12-15")' },
-                bbox: {
-                  type: 'array',
-                  description: 'Bounding box [ymin, xmin, ymax, xmax] normalized 0-1000',
-                  items: { type: 'number' },
-                  minItems: 4,
-                  maxItems: 4,
-                },
-                image_index: { type: 'number', description: 'Which inspiration image this item was found in (0-based index)' },
-              },
-              required: ['item_name', 'bucket', 'search_query', 'estimated_price', 'bbox', 'image_index'],
-            },
-          },
-          ignored_items: {
-            type: 'array',
-            description: 'Items filtered out (furniture, food, fixtures, items >$100)',
-            items: { type: 'string' },
-          },
-        },
-        required: ['theme_name', 'items', 'ignored_items'],
-      },
-    },
-    {
-      name: 'update_party_bucket',
-      description: 'Add, remove, or update the quantity of items in the user\'s party bucket. Use this when the user asks to add more items, remove items, or change quantities.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          actions: {
-            type: 'array',
-            description: 'List of bucket modifications',
-            items: {
-              type: 'object',
-              properties: {
-                action: { type: 'string', enum: ['add', 'remove', 'update_quantity'], description: 'What to do' },
-                item_name: { type: 'string', description: 'Name of the item (for add: new product name, for remove/update: existing item name or close match)' },
-                price: { type: 'number', description: 'Price in USD (required for add)' },
-                store: { type: 'string', enum: ['Amazon', 'Walmart', 'Target'], description: 'Retailer (required for add)' },
-                category: { type: 'string', description: 'Category (required for add)' },
-                quantity: { type: 'number', description: 'New quantity (for update_quantity) or quantity to add (for add)' },
-              },
-              required: ['action', 'item_name'],
-            },
-          },
-        },
-        required: ['actions'],
-      },
-    },
-  ];
-
-  async function callClaude(apiMessages) {
-    try {
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 4096,
-          system: PLANNER_SYSTEM,
-          tools: PLANNER_TOOLS,
-          messages: apiMessages,
-        }),
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        console.error('Chat API error:', err);
-        return { error: (err.error && err.error.message) || err.error || 'API request failed' };
-      }
-
-      return await res.json();
-    } catch (err) {
-      console.error('Chat API request failed:', err);
-      return { error: err.message || 'Network error' };
-    }
-  }
-
-  // Send the current conversation to Claude and handle the response.
-  async function sendToLLM() {
-    const state = data.plannerState;
-    if (!state || !state.apiMessages) return;
-
-    // Typing indicator
-    const typingEl = document.createElement('div');
-    typingEl.className = 'chat-message assistant';
-    typingEl.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-    chatMessages.appendChild(typingEl);
-    scrollChatToBottom();
-    chatInput.disabled = true;
-
-    const result = await callClaude(state.apiMessages);
-    typingEl.remove();
-    chatInput.disabled = false;
-    chatInput.focus();
-
-    if (!result || result.error) {
-      const msg = result && result.error ? result.error : 'Could not reach the API.';
-      addAssistantMessage('Sorry, something went wrong: ' + msg + '\n\nPlease try again in a moment.');
-      return;
-    }
-
-    // Collect text and tool_use blocks
-    const content = result.content || [];
-    const textParts = content.filter(b => b.type === 'text').map(b => b.text);
-    const toolUses = content.filter(b => b.type === 'tool_use');
-
-    // Append full assistant message to API history
-    state.apiMessages.push({ role: 'assistant', content: content });
-
-    // Display text
-    if (textParts.length > 0) {
-      addAssistantMessage(textParts.join('\n'));
-    }
-
-    // Handle tool calls — process ALL tool_use blocks and send results together
-    if (toolUses.length > 0) {
-      await handleToolUses(toolUses, state);
-    }
-
-    saveData(data);
-  }
-
-  async function processOneTool(tool, state) {
-    if (tool.name === 'search_pinterest_inspiration') {
-      const inp = tool.input || {};
-      if (inp.party_type) state.partyType = inp.party_type;
-      if (inp.theme) state.theme = inp.theme;
-
-      const pins = await fetchPinterestInspiration(inp.query, inp.max_results || 12);
-      addPinterestGrid(pins, tool.id);
-
-      return {
-        type: 'tool_result',
-        tool_use_id: tool.id,
-        content: `Displayed ${pins.length} Pinterest inspiration images for "${inp.query}". Waiting for the user to select one or request refinement.`,
-      };
-    }
-
-    if (tool.name === 'show_extracted_items') {
-      const inp = tool.input || {};
-      const imageUrls = (state.inspirationImageUrls || []);
-      addExtractedItemsChecklist(inp, imageUrls);
-      const itemCount = (inp.items || []).length;
-      const ignCount = (inp.ignored_items || []).length;
-      const buckets = [...new Set((inp.items || []).map(it => it.bucket))];
-      return {
-        type: 'tool_result',
-        tool_use_id: tool.id,
-        content: `Displayed ${itemCount} items across buckets [${buckets.join(', ')}] for "${inp.theme_name || 'party'}". ${ignCount} items filtered out. The user is reviewing which items to keep. Wait for their confirmation.`,
-      };
-    }
-
-    if (tool.name === 'search_real_products') {
-      return {
-        type: 'tool_result',
-        tool_use_id: tool.id,
-        content: 'Unknown tool. Product search is now handled by the frontend after user confirms extracted items.',
-      };
-    }
-
-    if (tool.name === 'update_party_bucket') {
-      const inp = tool.input || {};
-      const results = [];
-
-      for (const action of (inp.actions || [])) {
-        if (action.action === 'add') {
-          data.partyBucket.push({
-            id: generateId(),
-            name: action.item_name,
-            price: action.price || 0,
-            store: action.store || 'Amazon',
-            category: action.category || 'decorations',
-            quantity: action.quantity || 1,
-          });
-          results.push(`Added "${action.item_name}" to bucket`);
-        } else if (action.action === 'remove') {
-          const idx = data.partyBucket.findIndex(b =>
-            b.name.toLowerCase().includes(action.item_name.toLowerCase()) ||
-            action.item_name.toLowerCase().includes(b.name.toLowerCase())
-          );
-          if (idx !== -1) {
-            results.push(`Removed "${data.partyBucket[idx].name}" from bucket`);
-            data.partyBucket.splice(idx, 1);
-          } else {
-            results.push(`Could not find "${action.item_name}" in bucket`);
-          }
-        } else if (action.action === 'update_quantity') {
-          const item = data.partyBucket.find(b =>
-            b.name.toLowerCase().includes(action.item_name.toLowerCase()) ||
-            action.item_name.toLowerCase().includes(b.name.toLowerCase())
-          );
-          if (item) {
-            item.quantity = action.quantity || 1;
-            results.push(`Updated "${item.name}" quantity to ${item.quantity}`);
-          } else {
-            results.push(`Could not find "${action.item_name}" in bucket`);
-          }
-        }
-      }
-
-      saveData(data);
-      updateBucketUI();
-
-      return {
-        type: 'tool_result',
-        tool_use_id: tool.id,
-        content: results.join('. ') + `. Bucket now has ${data.partyBucket.length} items, total: ${formatCurrency(getBucketTotal())}.`,
-      };
-    }
-
-    return {
-      type: 'tool_result',
-      tool_use_id: tool.id,
-      content: 'Unknown tool.',
-    };
-  }
-
-  async function handleToolUses(toolUses, state) {
-    const toolResults = [];
-    for (const tool of toolUses) {
-      const result = await processOneTool(tool, state);
-      toolResults.push(result);
-    }
-
-    state.apiMessages.push({ role: 'user', content: toolResults });
-    saveData(data);
-
-    await sendToLLMContinue();
-  }
-
-  async function sendToLLMContinue() {
-    const state = data.plannerState;
-    if (!state || !state.apiMessages) return;
-
-    const result = await callClaude(state.apiMessages);
-    if (!result || result.error || !result.content) return;
-
-    const texts = result.content.filter(b => b.type === 'text').map(b => b.text);
-    const toolUses = result.content.filter(b => b.type === 'tool_use');
-
-    state.apiMessages.push({ role: 'assistant', content: result.content });
-
-    if (texts.length > 0) {
-      addAssistantMessage(texts.join('\n'));
-    }
-
-    if (toolUses.length > 0) {
-      await handleToolUses(toolUses, state);
-    } else {
-      saveData(data);
-    }
-  }
-
-  function getBucketTotal() {
-    return data.partyBucket.reduce((s, item) => s + (item.price * (item.quantity || 1)), 0);
-  }
+  const state = {
+    apiMessages: [],
+    spaceBase64: null,
+    spaceMediaType: null,
+    anchors: [],
+    inspirationImages: [],
+    inspirationUrls: [],
+    extractedItems: [],
+    themeName: '',
+    sheetState: 'collapsed',
+    chatOpen: false,
+  };
 
   // ══════════════════════════════════════
-  //  MCP Pipeline: Pinterest + Products
+  //  DOM REFS
   // ══════════════════════════════════════
 
-  async function fetchPinterestInspiration(query, maxResults) {
-    try {
-      const res = await fetch('/api/search-pinterest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, max_results: maxResults || 12 }),
-      });
-      const data = await res.json();
-      return data.pins || [];
-    } catch (err) {
-      console.error('Pinterest fetch failed:', err);
-      return [];
-    }
-  }
+  const $ = (sel) => document.querySelector(sel);
+  const $$ = (sel) => document.querySelectorAll(sel);
 
-  async function fetchRealProducts(query, retailer, maxResults) {
-    try {
-      const res = await fetch('/api/search-products', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, retailer, max_results: maxResults || 1 }),
-      });
-      const data = await res.json();
-      return data.products || [];
-    } catch (err) {
-      console.error('Product search failed:', err);
-      return [];
-    }
-  }
+  const workspace = $('#workspace');
+  const workspacePhotoWrap = $('#workspace-photo-wrap');
+  const workspacePhoto = $('#workspace-photo');
+  const anchorDotsContainer = $('#anchor-dots');
+  const landingOverlay = $('#landing-overlay');
+  const fab = $('#fab');
+  const fabFileInput = $('#fab-file-input');
+  const bottomSheet = $('#bottom-sheet');
+  const sheetHandle = $('#sheet-handle');
+  const sheetThemeName = $('#sheet-theme-name');
+  const sheetItemCount = $('#sheet-item-count');
+  const sheetBuckets = $('#sheet-buckets');
+  const sheetBody = $('#sheet-body');
+  const sheetItemsList = $('#sheet-items-list');
+  const sheetProducts = $('#sheet-products');
+  const sheetCheckout = $('#sheet-checkout');
+  const sheetFooter = $('#sheet-footer');
+  const bucketTotalPrice = $('#bucket-total-price');
+  const bucketCheckoutBtn = $('#bucket-checkout-btn');
+  const bucketCountBadge = $('#bucket-count-badge');
+  const chatDrawer = $('#chat-drawer');
+  const chatDrawerBackdrop = $('#chat-drawer-backdrop');
+  const chatMessages = $('#chat-messages');
+  const chatInput = $('#chat-input');
+  const chatSendBtn = $('#chat-send-btn');
+  const chatOpenBtn = $('#chat-open-btn');
+  const chatDrawerClose = $('#chat-drawer-close');
+  const chatUploadBtn = $('#chat-upload-btn');
+  const chatUploadInput = $('#chat-upload-input');
+  const chatImagePreview = $('#chat-image-preview');
+  const zoomModal = $('#zoom-modal');
+  const zoomModalClose = $('#zoom-modal-close');
+  const zoomModalImageWrap = $('#zoom-modal-image-wrap');
+  const zoomModalLabel = $('#zoom-modal-label');
+  const contextMenu = $('#context-menu');
+  const settingsBtn = $('#settings-btn');
+  const settingsForm = $('#settings-form');
+  const bucketBadgeBtn = $('#bucket-badge-btn');
 
-  // Render Pinterest inspiration grid in chat (multi-select, up to 3)
-  function addPinterestGrid(pins, toolUseId) {
-    const msg = document.createElement('div');
-    msg.className = 'chat-message assistant';
-    msg.style.maxWidth = '100%';
-
-    if (pins.length === 0) {
-      msg.innerHTML = '<em>No Pinterest results found. Try a different description or refinement.</em>';
-      chatMessages.appendChild(msg);
-      scrollChatToBottom();
-      return;
-    }
-
-    const heading = document.createElement('div');
-    heading.className = 'pinterest-heading';
-    heading.textContent = 'Pick up to 3 inspiration images, then confirm your selection.';
-    msg.appendChild(heading);
-
-    const grid = document.createElement('div');
-    grid.className = 'pinterest-grid';
-
-    const selectedPins = new Map(); // idx → pin object
-
-    const counter = document.createElement('div');
-    counter.className = 'pinterest-counter';
-    counter.textContent = '0/3 selected';
-
-    function updateSelectionUI() {
-      counter.textContent = `${selectedPins.size}/3 selected`;
-      confirmBtn.textContent = `Confirm Selection (${selectedPins.size})`;
-      confirmBtn.disabled = selectedPins.size === 0;
-
-      grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
-        const isSelected = selectedPins.has(i);
-        c.classList.toggle('selected', isSelected);
-        // Dim unselected cards when 3 are already chosen
-        c.classList.toggle('dimmed', !isSelected && selectedPins.size >= 3);
-
-        // Update badge
-        let badge = c.querySelector('.pinterest-selection-count');
-        if (isSelected) {
-          if (!badge) {
-            badge = document.createElement('div');
-            badge.className = 'pinterest-selection-count';
-            c.querySelector('.pinterest-img-wrap').appendChild(badge);
-          }
-          // Show the selection order number
-          const order = Array.from(selectedPins.keys()).indexOf(i) + 1;
-          badge.textContent = order;
-        } else if (badge) {
-          badge.remove();
-        }
-      });
-    }
-
-    pins.forEach((pin, i) => {
-      const card = document.createElement('div');
-      card.className = 'pinterest-card';
-      card.style.cursor = 'pointer';
-      card.innerHTML = `
-        <div class="pinterest-img-wrap" style="position:relative;">
-          <img src="${pin.image_url}" alt="${escapeHtml(pin.title || 'Inspiration')}" loading="lazy">
-        </div>
-      `;
-
-      card.addEventListener('click', () => {
-        if (selectedPins.has(i)) {
-          selectedPins.delete(i);
-        } else if (selectedPins.size < 3) {
-          selectedPins.set(i, pin);
-        }
-        updateSelectionUI();
-      });
-
-      grid.appendChild(card);
-    });
-
-    msg.appendChild(grid);
-    msg.appendChild(counter);
-
-    const confirmContainer = document.createElement('div');
-    confirmContainer.className = 'pinterest-confirm-container';
-
-    const confirmBtn = document.createElement('button');
-    confirmBtn.className = 'btn btn-primary pinterest-confirm-btn';
-    confirmBtn.textContent = 'Confirm Selection (0)';
-    confirmBtn.disabled = true;
-    confirmBtn.addEventListener('click', () => {
-      confirmBtn.disabled = true;
-      confirmBtn.textContent = 'Selection confirmed!';
-      grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
-        c.style.pointerEvents = 'none';
-        if (!selectedPins.has(i)) {
-          c.classList.add('dimmed');
-        }
-      });
-      showSpaceUploadStep(Array.from(selectedPins.values()));
-    });
-
-    confirmContainer.appendChild(confirmBtn);
-    msg.appendChild(confirmContainer);
-
-    chatMessages.appendChild(msg);
-    scrollChatToBottom();
-  }
-
-  // Show "Upload your space" step after inspiration selection
-  function showSpaceUploadStep(selectedPins) {
-    const msg = document.createElement('div');
-    msg.className = 'chat-message assistant';
-    msg.style.maxWidth = '100%';
-
-    const heading = document.createElement('div');
-    heading.className = 'space-upload-heading';
-    heading.innerHTML = '<strong>Now, show us your space!</strong><br>Upload a photo of your venue or area so we can tailor recommendations to fit. Or skip if you don\'t have one handy.';
-    msg.appendChild(heading);
-
-    const uploadArea = document.createElement('div');
-    uploadArea.className = 'space-upload-area';
-    uploadArea.innerHTML = '<div class="space-upload-icon">+</div><div class="space-upload-text">Tap to upload a photo of your space</div>';
-
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.accept = 'image/*';
-    fileInput.style.display = 'none';
-
-    const previewContainer = document.createElement('div');
-    previewContainer.className = 'space-upload-preview hidden';
-
-    let spaceImageData = null;
-
-    uploadArea.addEventListener('click', () => fileInput.click());
-
-    fileInput.addEventListener('change', () => {
-      const file = fileInput.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          canvas.width = Math.min(img.width, 1024);
-          canvas.height = Math.round(img.height * (canvas.width / img.width));
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-          const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
-          if (match) {
-            spaceImageData = { mediaType: match[1], data: match[2] };
-            previewContainer.innerHTML = '';
-            const previewImg = document.createElement('img');
-            previewImg.src = dataUrl;
-            previewContainer.appendChild(previewImg);
-            previewContainer.classList.remove('hidden');
-            uploadArea.classList.add('hidden');
-            analyzeBtn.textContent = 'Analyze with my space';
-          }
-        };
-        img.src = e.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
-
-    msg.appendChild(uploadArea);
-    msg.appendChild(fileInput);
-    msg.appendChild(previewContainer);
-
-    const actions = document.createElement('div');
-    actions.className = 'space-upload-actions';
-
-    const skipBtn = document.createElement('button');
-    skipBtn.className = 'btn btn-secondary';
-    skipBtn.textContent = 'Skip — no space photo';
-    skipBtn.addEventListener('click', () => {
-      skipBtn.disabled = true;
-      analyzeBtn.disabled = true;
-      uploadArea.style.pointerEvents = 'none';
-      handleMultiPinterestSelection(selectedPins, null);
-    });
-
-    const analyzeBtn = document.createElement('button');
-    analyzeBtn.className = 'btn btn-primary';
-    analyzeBtn.textContent = 'Analyze inspiration';
-    analyzeBtn.addEventListener('click', () => {
-      skipBtn.disabled = true;
-      analyzeBtn.disabled = true;
-      uploadArea.style.pointerEvents = 'none';
-      handleMultiPinterestSelection(selectedPins, spaceImageData);
-    });
-
-    actions.appendChild(skipBtn);
-    actions.appendChild(analyzeBtn);
-    msg.appendChild(actions);
-
-    chatMessages.appendChild(msg);
-    scrollChatToBottom();
-  }
-
-  // When user confirms their Pinterest image selections, feed them back to Claude as vision input
-  async function handleMultiPinterestSelection(pins, spaceImage) {
-    const state = data.plannerState;
-    if (!state || !state.apiMessages) return;
-
-    // Store inspiration image URLs for bbox thumbnail cropping later
-    state.inspirationImageUrls = pins.map(p => p.image_url);
-
-    const hasSpace = !!spaceImage;
-    addChatMessage('user', `I picked ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}!${hasSpace ? ' I also uploaded a photo of my space.' : ''} Please analyze and extract the items.`);
-
-    // Convert all images to base64 JPEG
-    const imageBlocks = [];
-    for (const pin of pins) {
-      try {
-        const imgRes = await fetch(pin.image_url);
-        const blob = await imgRes.blob();
-        const b64 = await new Promise((resolve, reject) => {
-          const img = new Image();
-          img.crossOrigin = 'anonymous';
-          img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.min(img.width, 1024);
-            canvas.height = Math.round(img.height * (canvas.width / img.width));
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-            const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-            const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
-            if (match) resolve({ mediaType: match[1], data: match[2] });
-            else reject(new Error('Could not extract base64'));
-          };
-          img.onerror = reject;
-          img.src = URL.createObjectURL(blob);
-        });
-        imageBlocks.push({
-          type: 'image',
-          source: { type: 'base64', media_type: b64.mediaType, data: b64.data },
-        });
-      } catch (err) {
-        console.warn('Could not convert image:', err);
-      }
-    }
-
-    const contentBlocks = [...imageBlocks];
-
-    if (spaceImage) {
-      contentBlocks.push({
-        type: 'image',
-        source: { type: 'base64', media_type: spaceImage.mediaType, data: spaceImage.data },
-      });
-    }
-
-    const spaceContext = spaceImage
-      ? ' The LAST image is a photo of my actual venue/space. Factor in the space when making recommendations — consider the size, existing furniture, lighting, colors, and layout. Only suggest items that make sense for this specific space. If the space is small, skip large items. If there are existing colors/features, complement them.'
-      : '';
-
-    contentBlocks.push({
-      type: 'text',
-      text: `I selected ${pins.length} inspiration image${pins.length > 1 ? 's' : ''}.${spaceContext} Switch to your Extraction Agent role: analyze ALL images. For every buyable item you find, assign it to a functional bucket (tabletop, wall_backdrop, accent_decor, activity_favors, food_display) and provide a bounding box [ymin, xmin, ymax, xmax] normalized to 0-1000 plus the image_index (0-based). Filter out furniture, food, fixtures, and items over $100. Call show_extracted_items with the results.`,
-    });
-
-    state.apiMessages.push({ role: 'user', content: contentBlocks });
-    saveData(data);
-    sendToLLM();
-  }
+  // ══════════════════════════════════════
+  //  BUCKET METADATA
+  // ══════════════════════════════════════
 
   const BUCKET_META = {
     tabletop:        { label: 'Tabletop',          icon: '\u{1F37D}', color: '#6c5ce7' },
@@ -723,6 +106,51 @@
     activity_favors: { label: 'Activity & Favors',  icon: '\u{1F381}', color: '#fdcb6e' },
     food_display:    { label: 'Food Display',       icon: '\u{1F382}', color: '#0984e3' },
   };
+
+  const BUCKET_ORDER = ['tabletop', 'wall_backdrop', 'accent_decor', 'activity_favors', 'food_display'];
+
+  // ══════════════════════════════════════
+  //  UTILITIES
+  // ══════════════════════════════════════
+
+  function escapeHtml(str) {
+    const div = document.createElement('div');
+    div.textContent = str || '';
+    return div.innerHTML;
+  }
+
+  function formatCurrency(amount) {
+    return '$' + Number(amount || 0).toFixed(2);
+  }
+
+  function compressImage(file, maxWidth, quality) {
+    return new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          let w = img.width, h = img.height;
+          if (w > (maxWidth || 1024)) {
+            h = Math.round(h * (maxWidth || 1024) / w);
+            w = maxWidth || 1024;
+          }
+          canvas.width = w;
+          canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          resolve(canvas.toDataURL('image/jpeg', quality || 0.85));
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function dataUrlToBase64(dataUrl) {
+    const match = dataUrl.match(/^data:(image\/[^;]+);base64,(.+)$/);
+    if (!match) return null;
+    return { mediaType: match[1], base64: match[2] };
+  }
 
   function buildBboxThumbnailStyle(imageUrl, bbox) {
     if (!imageUrl || !bbox || bbox.length < 4) return '';
@@ -736,184 +164,683 @@
     return `background-image: url('${imageUrl}'); background-size: ${bgSizeX.toFixed(1)}% ${bgSizeY.toFixed(1)}%; background-position: ${bgPosX.toFixed(1)}% ${bgPosY.toFixed(1)}%;`;
   }
 
-  // Render extracted items as an editable checklist in chat
-  function addExtractedItemsChecklist(extraction, imageUrls) {
-    const rawItems = (extraction.items || []).map((it, i) => ({
-      ...it,
-      _key: 'item_' + i,
-      name: it.item_name,
-      search_query: it.search_query,
-    }));
-    const ignored = extraction.ignored_items || [];
+  // ══════════════════════════════════════
+  //  API CALLS
+  // ══════════════════════════════════════
 
-    // Group items by bucket
-    const bucketOrder = ['tabletop', 'wall_backdrop', 'accent_decor', 'activity_favors', 'food_display'];
-    const grouped = {};
-    for (const item of rawItems) {
-      const b = item.bucket || 'accent_decor';
-      if (!grouped[b]) grouped[b] = [];
-      grouped[b].push(item);
+  const PLANNER_SYSTEM = [
+    'You are a friendly, knowledgeable AI Party Planning Agent. You help users plan parties using a spatial, visual approach.',
+    '',
+    'The app has already handled vision tasks (space analysis, item extraction) via Gemini Flash.',
+    'Your job is to be the conversational brain: answer questions, give suggestions, help refine selections.',
+    '',
+    'You can help with:',
+    '- Theme ideas and color palette suggestions',
+    '- Budget advice and prioritization',
+    '- Quantity recommendations based on guest count',
+    '- Alternative product suggestions',
+    '- General party planning tips',
+    '',
+    'Keep responses concise (1-3 sentences). Be warm and enthusiastic.',
+    'You do NOT need to search for products or extract items — the app handles that automatically.',
+  ].join('\n');
+
+  const PLANNER_TOOLS = [
+    {
+      name: 'update_party_bucket',
+      description: 'Add, remove, or update items in the user\'s party bucket.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          actions: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                action: { type: 'string', enum: ['add', 'remove'] },
+                item_name: { type: 'string' },
+                price: { type: 'number' },
+                store: { type: 'string' },
+              },
+              required: ['action', 'item_name'],
+            },
+          },
+        },
+        required: ['actions'],
+      },
+    },
+  ];
+
+  async function callClaude(messages) {
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 2048,
+          system: PLANNER_SYSTEM,
+          tools: PLANNER_TOOLS,
+          messages,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        return { error: err.error?.message || err.error || 'API error' };
+      }
+      return await res.json();
+    } catch (err) {
+      return { error: err.message || 'Network error' };
+    }
+  }
+
+  async function callAnalyzeSpace(base64, mediaType) {
+    try {
+      const res = await fetch('/api/analyze-space', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image_base64: base64, media_type: mediaType }),
+      });
+      const d = await res.json();
+      return d.anchors || [];
+    } catch (err) {
+      console.error('Analyze space failed:', err);
+      return [];
+    }
+  }
+
+  async function callExtractItems(images, spaceAnchors) {
+    try {
+      const res = await fetch('/api/extract-items', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ images, space_anchors: spaceAnchors }),
+      });
+      const d = await res.json();
+      return d.items || [];
+    } catch (err) {
+      console.error('Extract items failed:', err);
+      return [];
+    }
+  }
+
+  async function callSearchInspiration(query, maxResults) {
+    try {
+      const res = await fetch('/api/search-inspiration', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, max_results: maxResults || 12 }),
+      });
+      const d = await res.json();
+      return d.images || [];
+    } catch (err) {
+      console.error('Inspiration search failed:', err);
+      return [];
+    }
+  }
+
+  async function callSearchProducts(query, maxResults) {
+    try {
+      const res = await fetch('/api/search-products', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, max_results: maxResults || 5 }),
+      });
+      const d = await res.json();
+      return d.products || [];
+    } catch (err) {
+      console.error('Product search failed:', err);
+      return [];
+    }
+  }
+
+  async function callSearchKits(query, maxResults) {
+    try {
+      const res = await fetch('/api/search-kits', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, max_results: maxResults || 3 }),
+      });
+      const d = await res.json();
+      return d.kits || [];
+    } catch (err) {
+      console.error('Kit search failed:', err);
+      return [];
+    }
+  }
+
+  // ══════════════════════════════════════
+  //  BOTTOM SHEET (3-state)
+  // ══════════════════════════════════════
+
+  function setSheetState(newState) {
+    state.sheetState = newState;
+    bottomSheet.classList.remove('sheet-collapsed', 'sheet-half', 'sheet-full');
+    bottomSheet.classList.add('sheet-' + newState);
+  }
+
+  let sheetTouchStartY = 0;
+  let sheetStartHeight = 0;
+
+  sheetHandle.addEventListener('touchstart', (e) => {
+    sheetTouchStartY = e.touches[0].clientY;
+    const rect = bottomSheet.getBoundingClientRect();
+    sheetStartHeight = rect.height;
+    bottomSheet.style.transition = 'none';
+  }, { passive: true });
+
+  sheetHandle.addEventListener('touchmove', (e) => {
+    const dy = sheetTouchStartY - e.touches[0].clientY;
+    const newHeight = Math.max(60, Math.min(window.innerHeight * 0.92, sheetStartHeight + dy));
+    bottomSheet.style.height = newHeight + 'px';
+    bottomSheet.classList.remove('sheet-collapsed', 'sheet-half', 'sheet-full');
+  }, { passive: true });
+
+  sheetHandle.addEventListener('touchend', () => {
+    bottomSheet.style.transition = '';
+    bottomSheet.style.height = '';
+    const rect = bottomSheet.getBoundingClientRect();
+    const vh = window.innerHeight;
+    const ratio = rect.height / vh;
+    if (ratio < 0.15) setSheetState('collapsed');
+    else if (ratio < 0.6) setSheetState('half');
+    else setSheetState('full');
+  });
+
+  sheetHandle.addEventListener('click', () => {
+    if (state.sheetState === 'collapsed') setSheetState('half');
+    else if (state.sheetState === 'half') setSheetState('full');
+    else setSheetState('collapsed');
+  });
+
+  // Bucket badge opens sheet to half
+  bucketBadgeBtn.addEventListener('click', () => {
+    if (state.sheetState === 'collapsed') setSheetState('half');
+    else setSheetState('collapsed');
+  });
+
+  // ══════════════════════════════════════
+  //  FAB — UPLOAD SPACE PHOTO
+  // ══════════════════════════════════════
+
+  fab.addEventListener('click', () => fabFileInput.click());
+
+  fabFileInput.addEventListener('change', async () => {
+    const file = fabFileInput.files[0];
+    if (!file) return;
+    fabFileInput.value = '';
+    await handleSpaceUpload(file);
+  });
+
+  // Quick pick buttons on landing
+  $$('.quick-pick-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const type = btn.dataset.type;
+      landingOverlay.classList.add('hidden');
+      openChatDrawer();
+      chatInput.value = `I'm planning a ${btn.textContent.trim().toLowerCase()} party!`;
+      handleChatSend();
+    });
+  });
+
+  async function handleSpaceUpload(file) {
+    landingOverlay.classList.add('hidden');
+
+    const dataUrl = await compressImage(file, 1024, 0.85);
+    const parsed = dataUrlToBase64(dataUrl);
+    if (!parsed) return;
+
+    state.spaceBase64 = parsed.base64;
+    state.spaceMediaType = parsed.mediaType;
+
+    workspacePhoto.src = dataUrl;
+    workspacePhotoWrap.classList.remove('hidden');
+
+    sheetThemeName.textContent = 'Analyzing your space...';
+    setSheetState('collapsed');
+
+    const anchors = await callAnalyzeSpace(parsed.base64, parsed.mediaType);
+    state.anchors = anchors;
+    data.anchors = anchors;
+    data.spacePhoto = dataUrl;
+    saveData(data);
+
+    renderAnchorDots(anchors);
+
+    if (anchors.length > 0) {
+      sheetThemeName.textContent = `${anchors.length} anchor points found`;
+      sheetItemCount.textContent = 'Tap one to explore';
+      addChatMessage('assistant', `I found ${anchors.length} decoration zones in your space: ${anchors.map(a => a.label).join(', ')}. Now pick a party theme so I can find inspiration!`);
+    } else {
+      sheetThemeName.textContent = 'No anchors found';
+      addChatMessage('assistant', 'I couldn\'t detect clear anchor points, but we can still plan your party! Tell me what kind of party you\'re planning.');
     }
 
+    openChatDrawer();
+  }
+
+  // ══════════════════════════════════════
+  //  ANCHOR DOTS
+  // ══════════════════════════════════════
+
+  function renderAnchorDots(anchors) {
+    anchorDotsContainer.innerHTML = '';
+    anchors.forEach(anchor => {
+      const dot = document.createElement('button');
+      dot.className = 'anchor-dot anchor-dot--pulse';
+      dot.style.left = (anchor.position[0] / 10) + '%';
+      dot.style.top = (anchor.position[1] / 10) + '%';
+      dot.dataset.anchorId = anchor.id;
+      dot.setAttribute('aria-label', anchor.label);
+
+      dot.innerHTML = `
+        <span class="anchor-dot-ring"></span>
+        <span class="anchor-dot-label">${escapeHtml(anchor.label)}</span>
+      `;
+
+      dot.addEventListener('click', () => handleAnchorTap(anchor));
+
+      let pressTimer;
+      dot.addEventListener('touchstart', (e) => {
+        pressTimer = setTimeout(() => {
+          e.preventDefault();
+          showContextMenu(e.touches[0].clientX, e.touches[0].clientY, anchor);
+        }, 500);
+      }, { passive: false });
+      dot.addEventListener('touchend', () => clearTimeout(pressTimer));
+      dot.addEventListener('touchmove', () => clearTimeout(pressTimer));
+
+      anchorDotsContainer.appendChild(dot);
+    });
+  }
+
+  function handleAnchorTap(anchor) {
+    $$('.anchor-dot').forEach(d => d.classList.remove('anchor-dot--active'));
+    const dot = $(`[data-anchor-id="${anchor.id}"]`);
+    if (dot) dot.classList.add('anchor-dot--active');
+
+    const items = state.extractedItems.filter(it => it.anchor_id === anchor.id);
+    if (items.length > 0) {
+      renderItemsForAnchor(items, anchor.label);
+      setSheetState('half');
+    }
+  }
+
+  function renderItemsForAnchor(items, label) {
+    sheetItemsList.innerHTML = '';
+    const heading = document.createElement('div');
+    heading.className = 'checklist-heading';
+    heading.innerHTML = `<strong>${escapeHtml(label)}</strong> — ${items.length} item${items.length !== 1 ? 's' : ''}`;
+    sheetItemsList.appendChild(heading);
+
+    const list = document.createElement('div');
+    list.className = 'extracted-items-list';
+    items.forEach(item => {
+      const imgUrl = state.inspirationUrls[item.image_index] || '';
+      const thumbStyle = buildBboxThumbnailStyle(imgUrl, item.bbox);
+      const row = document.createElement('div');
+      row.className = 'extracted-item-row';
+      row.innerHTML = `<div class="extracted-item-label">
+        ${thumbStyle ? `<div class="extracted-item-thumb" style="${thumbStyle}"></div>` : '<div class="extracted-item-thumb extracted-item-thumb-empty"></div>'}
+        <div class="extracted-item-info">
+          <span class="extracted-item-name">${escapeHtml(item.item_name)}</span>
+          <span class="extracted-item-meta">${typeof item.estimated_price === 'number' ? formatCurrency(item.estimated_price) : escapeHtml(String(item.estimated_price || ''))}</span>
+        </div>
+      </div>`;
+      row.addEventListener('click', () => {
+        searchAndShowProducts(item);
+      });
+      list.appendChild(row);
+    });
+    sheetItemsList.appendChild(list);
+  }
+
+  // ══════════════════════════════════════
+  //  INSPIRATION SEARCH (Serper.dev)
+  // ══════════════════════════════════════
+
+  async function fetchAndShowInspiration(query) {
+    addChatMessage('assistant', 'Searching for inspiration...');
+    const images = await callSearchInspiration(query, 12);
+
+    if (images.length === 0) {
+      addChatMessage('assistant', 'No inspiration images found. Try describing your theme differently.');
+      return;
+    }
+
+    renderInspirationGrid(images);
+  }
+
+  function renderInspirationGrid(images) {
     const msg = document.createElement('div');
     msg.className = 'chat-message assistant';
     msg.style.maxWidth = '100%';
 
     const heading = document.createElement('div');
-    heading.className = 'checklist-heading';
-    heading.innerHTML = '<strong>' + escapeHtml(extraction.theme_name || 'Your Party') + '</strong><br>Uncheck anything you don\'t need, then click "Find Products".';
+    heading.className = 'pinterest-heading';
+    heading.textContent = 'Pick up to 3 inspiration images:';
     msg.appendChild(heading);
 
-    const checkedKeys = new Set(rawItems.map(it => it._key));
+    const grid = document.createElement('div');
+    grid.className = 'pinterest-grid';
 
-    for (const bucket of bucketOrder) {
-      const items = grouped[bucket];
-      if (!items || items.length === 0) continue;
+    const selected = new Map();
 
-      const meta = BUCKET_META[bucket] || { label: bucket, icon: '', color: '#636e72' };
+    const counter = document.createElement('div');
+    counter.className = 'pinterest-counter';
+    counter.textContent = '0/3 selected';
 
-      const section = document.createElement('div');
-      section.className = 'extraction-section bucket-section';
-
-      const header = document.createElement('div');
-      header.className = 'extraction-section-header';
-      header.style.background = meta.color;
-      header.innerHTML = '<span class="extraction-section-title" style="color:white">' + meta.icon + ' ' + escapeHtml(meta.label) + '</span><span class="extraction-section-subtitle" style="color:rgba(255,255,255,0.8)">' + items.length + ' item' + (items.length > 1 ? 's' : '') + '</span>';
-      section.appendChild(header);
-
-      const list = document.createElement('div');
-      list.className = 'extracted-items-list';
-
-      items.forEach(item => {
-        const imgUrl = imageUrls[item.image_index] || imageUrls[0] || '';
-        const thumbStyle = buildBboxThumbnailStyle(imgUrl, item.bbox);
-
-        const row = document.createElement('div');
-        row.className = 'extracted-item-row';
-        row.innerHTML = '<label class="extracted-item-label">' +
-          '<input type="checkbox" checked class="extracted-item-check" data-key="' + item._key + '">' +
-          (thumbStyle ? '<div class="extracted-item-thumb" style="' + thumbStyle + '"></div>' : '<div class="extracted-item-thumb extracted-item-thumb-empty"></div>') +
-          '<div class="extracted-item-info">' +
-            '<span class="extracted-item-name">' + escapeHtml(item.name) + '</span>' +
-            '<span class="extracted-item-meta">' + escapeHtml(item.estimated_price || '') + '</span>' +
-          '</div>' +
-        '</label>';
-
-        const checkbox = row.querySelector('input');
-        checkbox.addEventListener('change', () => {
-          if (checkbox.checked) checkedKeys.add(item._key);
-          else checkedKeys.delete(item._key);
-          confirmBtn.textContent = 'Find Products (' + checkedKeys.size + ')';
-          confirmBtn.disabled = checkedKeys.size === 0;
-        });
-        list.appendChild(row);
-      });
-
-      section.appendChild(list);
-      msg.appendChild(section);
-    }
-
-    if (ignored.length > 0) {
-      const ignoredDiv = document.createElement('div');
-      ignoredDiv.className = 'extraction-ignored';
-      ignoredDiv.innerHTML = '<span class="extraction-ignored-label">Filtered out:</span> ' + ignored.map(it => escapeHtml(it)).join(', ');
-      msg.appendChild(ignoredDiv);
-    }
-
-    const actions = document.createElement('div');
-    actions.className = 'checklist-actions';
     const confirmBtn = document.createElement('button');
-    confirmBtn.className = 'btn btn-primary checklist-confirm-btn';
-    confirmBtn.textContent = 'Find Products (' + checkedKeys.size + ')';
-    confirmBtn.addEventListener('click', () => {
-      const confirmed = rawItems.filter(it => checkedKeys.has(it._key));
-      confirmBtn.disabled = true;
-      confirmBtn.textContent = 'Searching products...';
-      msg.querySelectorAll('input').forEach(cb => { cb.disabled = true; });
-      handleItemsConfirmed(confirmed);
+    confirmBtn.className = 'btn btn-primary pinterest-confirm-btn';
+    confirmBtn.textContent = 'Confirm (0)';
+    confirmBtn.disabled = true;
+
+    function updateUI() {
+      counter.textContent = `${selected.size}/3 selected`;
+      confirmBtn.textContent = `Confirm (${selected.size})`;
+      confirmBtn.disabled = selected.size === 0;
+      grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
+        const isSel = selected.has(i);
+        c.classList.toggle('selected', isSel);
+        c.classList.toggle('dimmed', !isSel && selected.size >= 3);
+        let badge = c.querySelector('.pinterest-selection-count');
+        if (isSel) {
+          if (!badge) {
+            badge = document.createElement('div');
+            badge.className = 'pinterest-selection-count';
+            c.querySelector('.pinterest-img-wrap').appendChild(badge);
+          }
+          badge.textContent = Array.from(selected.keys()).indexOf(i) + 1;
+        } else if (badge) {
+          badge.remove();
+        }
+      });
+    }
+
+    images.forEach((img, i) => {
+      const card = document.createElement('div');
+      card.className = 'pinterest-card';
+      card.innerHTML = `<div class="pinterest-img-wrap" style="position:relative;">
+        <img src="${escapeHtml(img.image_url)}" alt="${escapeHtml(img.title)}" loading="lazy">
+      </div>`;
+      card.addEventListener('click', () => {
+        if (selected.has(i)) selected.delete(i);
+        else if (selected.size < 3) selected.set(i, img);
+        updateUI();
+      });
+      grid.appendChild(card);
     });
-    actions.appendChild(confirmBtn);
-    msg.appendChild(actions);
+
+    confirmBtn.addEventListener('click', () => {
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'Extracting items...';
+      grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
+        c.style.pointerEvents = 'none';
+        if (!selected.has(i)) c.classList.add('dimmed');
+      });
+      handleInspirationConfirmed(Array.from(selected.values()));
+    });
+
+    msg.appendChild(grid);
+    msg.appendChild(counter);
+    const confirmWrap = document.createElement('div');
+    confirmWrap.className = 'pinterest-confirm-container';
+    confirmWrap.appendChild(confirmBtn);
+    msg.appendChild(confirmWrap);
 
     chatMessages.appendChild(msg);
     scrollChatToBottom();
   }
 
-  // Search products for each confirmed item
-  async function handleItemsConfirmed(confirmedItems) {
-    // Show progress
-    const progressMsg = document.createElement('div');
-    progressMsg.className = 'chat-message assistant';
-    progressMsg.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-    chatMessages.appendChild(progressMsg);
-    scrollChatToBottom();
+  async function handleInspirationConfirmed(selectedImages) {
+    state.inspirationUrls = selectedImages.map(img => img.image_url);
+    data.inspirationUrls = state.inspirationUrls;
+
+    addChatMessage('user', `I picked ${selectedImages.length} inspiration image${selectedImages.length > 1 ? 's' : ''}!`);
+    addChatMessage('assistant', 'Analyzing inspiration images with Gemini Vision...');
+
+    const imagePayloads = [];
+    for (const img of selectedImages) {
+      try {
+        const resp = await fetch(img.image_url);
+        const blob = await resp.blob();
+        const dataUrl = await new Promise((resolve, reject) => {
+          const imgEl = new Image();
+          imgEl.crossOrigin = 'anonymous';
+          imgEl.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.min(imgEl.width, 1024);
+            canvas.height = Math.round(imgEl.height * (canvas.width / imgEl.width));
+            canvas.getContext('2d').drawImage(imgEl, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL('image/jpeg', 0.85));
+          };
+          imgEl.onerror = reject;
+          imgEl.src = URL.createObjectURL(blob);
+        });
+        const parsed = dataUrlToBase64(dataUrl);
+        if (parsed) imagePayloads.push(parsed);
+      } catch (err) {
+        console.warn('Could not convert inspiration image:', err);
+      }
+    }
+
+    if (imagePayloads.length === 0) {
+      addChatMessage('assistant', 'Could not load the inspiration images. Try selecting different ones.');
+      return;
+    }
+
+    const items = await callExtractItems(imagePayloads, state.anchors);
+    state.extractedItems = items;
+    data.extractedItems = items;
+    saveData(data);
+
+    closeChatDrawer();
+    renderExtractedItemsInSheet(items);
+
+    if (items.length > 0) {
+      sheetThemeName.textContent = state.themeName || 'Party Items';
+      sheetItemCount.textContent = `${items.length} items found`;
+      setSheetState('half');
+
+      // Map items to anchor dots
+      items.forEach(item => {
+        if (item.anchor_id) {
+          const dot = $(`[data-anchor-id="${item.anchor_id}"]`);
+          if (dot) {
+            dot.classList.remove('anchor-dot--pulse');
+            dot.classList.add('anchor-dot--active');
+          }
+        }
+      });
+    } else {
+      addChatMessage('assistant', 'No buyable items found in those images. Try different inspiration!');
+      openChatDrawer();
+    }
+  }
+
+  // ══════════════════════════════════════
+  //  EXTRACTED ITEMS IN BOTTOM SHEET
+  // ══════════════════════════════════════
+
+  function renderExtractedItemsInSheet(items) {
+    sheetItemsList.innerHTML = '';
+    sheetProducts.innerHTML = '';
+
+    const grouped = {};
+    for (const item of items) {
+      const b = item.bucket || 'accent_decor';
+      if (!grouped[b]) grouped[b] = [];
+      grouped[b].push(item);
+    }
+
+    // Render bucket icons
+    renderBucketIcons(grouped);
+
+    const checkedKeys = new Set(items.map((_, i) => 'item_' + i));
+
+    for (const bucket of BUCKET_ORDER) {
+      const bucketItems = grouped[bucket];
+      if (!bucketItems || bucketItems.length === 0) continue;
+
+      const meta = BUCKET_META[bucket] || { label: bucket, icon: '', color: '#636e72' };
+
+      const section = document.createElement('div');
+      section.className = 'extraction-section';
+
+      const header = document.createElement('div');
+      header.className = 'extraction-section-header';
+      header.style.background = meta.color;
+      header.innerHTML = `<span class="extraction-section-title" style="color:white">${meta.icon} ${escapeHtml(meta.label)}</span>
+        <span class="extraction-section-subtitle" style="color:rgba(255,255,255,0.8)">${bucketItems.length} item${bucketItems.length > 1 ? 's' : ''}</span>`;
+      section.appendChild(header);
+
+      const list = document.createElement('div');
+      list.className = 'extracted-items-list';
+
+      bucketItems.forEach((item, bi) => {
+        const globalIdx = items.indexOf(item);
+        const key = 'item_' + globalIdx;
+        const imgUrl = state.inspirationUrls[item.image_index] || '';
+        const thumbStyle = buildBboxThumbnailStyle(imgUrl, item.bbox);
+
+        const row = document.createElement('div');
+        row.className = 'extracted-item-row';
+        row.innerHTML = `<label class="extracted-item-label">
+          <input type="checkbox" checked class="extracted-item-check" data-key="${key}">
+          ${thumbStyle ? `<div class="extracted-item-thumb" style="${thumbStyle}"></div>` : '<div class="extracted-item-thumb extracted-item-thumb-empty"></div>'}
+          <div class="extracted-item-info">
+            <span class="extracted-item-name">${escapeHtml(item.item_name)}</span>
+            <span class="extracted-item-meta">${typeof item.estimated_price === 'number' ? formatCurrency(item.estimated_price) : escapeHtml(String(item.estimated_price || ''))}</span>
+          </div>
+        </label>`;
+
+        const cb = row.querySelector('input');
+        cb.addEventListener('change', () => {
+          if (cb.checked) checkedKeys.add(key);
+          else checkedKeys.delete(key);
+          findBtn.textContent = `Find Products (${checkedKeys.size})`;
+          findBtn.disabled = checkedKeys.size === 0;
+        });
+
+        list.appendChild(row);
+      });
+
+      section.appendChild(list);
+      sheetItemsList.appendChild(section);
+    }
+
+    // Find Products button
+    const actions = document.createElement('div');
+    actions.className = 'checklist-actions';
+    actions.style.padding = '12px 16px';
+    const findBtn = document.createElement('button');
+    findBtn.className = 'btn btn-primary checklist-confirm-btn';
+    findBtn.textContent = `Find Products (${checkedKeys.size})`;
+    findBtn.addEventListener('click', () => {
+      const confirmed = items.filter((_, i) => checkedKeys.has('item_' + i));
+      findBtn.disabled = true;
+      findBtn.textContent = 'Searching...';
+      sheetItemsList.querySelectorAll('input').forEach(cb => cb.disabled = true);
+      handleFindProducts(confirmed);
+    });
+    actions.appendChild(findBtn);
+    sheetItemsList.appendChild(actions);
+  }
+
+  function renderBucketIcons(grouped) {
+    sheetBuckets.innerHTML = '';
+    for (const bucket of BUCKET_ORDER) {
+      const items = grouped[bucket] || [];
+      const meta = BUCKET_META[bucket];
+      const btn = document.createElement('button');
+      btn.className = 'sheet-bucket-icon' + (items.length > 0 ? '' : '');
+      btn.dataset.bucket = bucket;
+      btn.innerHTML = `
+        <span class="sheet-bucket-emoji">${meta.icon}</span>
+        ${items.length > 0 ? `<span class="sheet-bucket-count">${items.length}</span>` : ''}
+        <span class="sheet-bucket-label">${meta.label.split(' ')[0]}</span>
+      `;
+      btn.addEventListener('click', () => {
+        $$('.sheet-bucket-icon').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        const section = sheetItemsList.querySelectorAll('.extraction-section');
+        section.forEach(s => s.style.display = '');
+        // scroll to this bucket's section
+        const idx = BUCKET_ORDER.indexOf(bucket);
+        if (section[idx]) section[idx].scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+      sheetBuckets.appendChild(btn);
+    }
+  }
+
+  // ══════════════════════════════════════
+  //  PRODUCT SEARCH
+  // ══════════════════════════════════════
+
+  async function handleFindProducts(confirmedItems) {
+    sheetProducts.innerHTML = '<div style="text-align:center;padding:20px;"><div class="spinner" style="margin:0 auto;"></div><p style="margin-top:8px;font-size:0.85rem;color:var(--text-light);">Searching products...</p></div>';
+    setSheetState('full');
 
     const allResults = [];
     for (const item of confirmedItems) {
-      const products = await fetchRealProducts(item.search_query, 'amazon', 3);
-      allResults.push({ item, products });
+      const [products, kits] = await Promise.all([
+        callSearchProducts(item.search_query, 3),
+        callSearchKits(item.search_query, 2),
+      ]);
+      allResults.push({ item, products, kits });
     }
 
-    progressMsg.remove();
-    addProductResultsList(allResults);
+    renderProductResults(allResults);
   }
 
-  // Render product results with checkboxes
-  function addProductResultsList(allResults) {
-    const msg = document.createElement('div');
-    msg.className = 'chat-message assistant';
-    msg.style.maxWidth = '100%';
+  function renderProductResults(allResults) {
+    sheetProducts.innerHTML = '';
 
     const heading = document.createElement('div');
     heading.className = 'checklist-heading';
-    heading.innerHTML = '<strong>Product matches found!</strong><br>Check the products you want in your Party Bucket.';
-    msg.appendChild(heading);
+    heading.innerHTML = '<strong>Product Matches</strong><br>Check items to add to your party bucket.';
+    sheetProducts.appendChild(heading);
 
     const list = document.createElement('div');
     list.className = 'product-results-list';
 
-    const selectedProducts = new Map(); // key → product+category
+    const selectedProducts = new Map();
 
-    allResults.forEach(({ item, products }) => {
-      if (products.length === 0) return;
+    allResults.forEach(({ item, products, kits }) => {
+      const combined = [...(kits || []), ...(products || [])];
+      if (combined.length === 0) return;
 
       const groupLabel = document.createElement('div');
       groupLabel.className = 'product-group-label';
-      groupLabel.textContent = item.name;
+      groupLabel.textContent = item.item_name;
       list.appendChild(groupLabel);
 
-      products.forEach((product, pi) => {
-        const key = `${item.name}-${pi}`;
+      combined.forEach((product, pi) => {
+        const key = `${item.item_name}-${pi}`;
+        const isFirst = pi === 0;
+        if (isFirst) selectedProducts.set(key, { product, bucket: item.bucket });
+
         const row = document.createElement('div');
         row.className = 'product-result-row';
-        // First product in each group is pre-checked
-        const isFirst = pi === 0;
-        if (isFirst) selectedProducts.set(key, { product, category: item.category });
+        row.innerHTML = `<label class="product-result-label">
+          <input type="checkbox" ${isFirst ? 'checked' : ''} class="product-result-check" data-key="${escapeHtml(key)}">
+          <div class="product-result-image">
+            ${product.image ? `<img src="${escapeHtml(product.image)}" alt="" loading="lazy">` : '<div class="product-no-image">No img</div>'}
+          </div>
+          <div class="product-result-info">
+            <span class="product-result-name">${escapeHtml(product.name)}</span>
+            <span class="product-result-price">${product.price ? formatCurrency(product.price) : 'Price N/A'}</span>
+            <span class="product-result-retailer">${escapeHtml(product.retailer || '')}</span>
+            ${product.url ? `<a href="${escapeHtml(product.url)}" target="_blank" rel="noopener" class="product-result-link" onclick="event.stopPropagation()">View &rarr;</a>` : ''}
+          </div>
+        </label>`;
 
-        row.innerHTML = `
-          <label class="product-result-label">
-            <input type="checkbox" ${isFirst ? 'checked' : ''} class="product-result-check" data-key="${escapeHtml(key)}">
-            <div class="product-result-image">
-              ${product.image ? `<img src="${escapeHtml(product.image)}" alt="" loading="lazy">` : '<div class="product-no-image">No image</div>'}
-            </div>
-            <div class="product-result-info">
-              <span class="product-result-name">${escapeHtml(product.name)}</span>
-              <span class="product-result-price">${product.price ? '$' + product.price.toFixed(2) : 'Price N/A'}</span>
-              <span class="product-result-retailer">${escapeHtml(product.retailer || 'Google Shopping')}</span>
-              ${product.url ? `<a href="${escapeHtml(product.url)}" target="_blank" rel="noopener" class="product-result-link" onclick="event.stopPropagation()">View listing &rarr;</a>` : ''}
-            </div>
-          </label>
-        `;
-
-        const checkbox = row.querySelector('input');
-        checkbox.addEventListener('change', () => {
-          if (checkbox.checked) {
-            selectedProducts.set(key, { product, category: item.category });
-          } else {
-            selectedProducts.delete(key);
-          }
+        const cb = row.querySelector('input');
+        cb.addEventListener('change', () => {
+          if (cb.checked) selectedProducts.set(key, { product, bucket: item.bucket });
+          else selectedProducts.delete(key);
           const total = Array.from(selectedProducts.values()).reduce((s, v) => s + (v.product.price || 0), 0);
-          addBtn.textContent = `Add to Bucket (${selectedProducts.size} items · $${total.toFixed(2)})`;
+          addBtn.textContent = `Add to Bucket (${selectedProducts.size} · ${formatCurrency(total)})`;
           addBtn.disabled = selectedProducts.size === 0;
         });
 
@@ -921,139 +848,249 @@
       });
     });
 
-    msg.appendChild(list);
-
-    // If no products found at all
     if (list.children.length === 0) {
-      list.innerHTML = '<div class="product-no-results">No products found. The AI agent can still help — just ask in chat!</div>';
+      list.innerHTML = '<div class="product-no-results">No products found. Try adjusting your selections.</div>';
     }
+
+    sheetProducts.appendChild(list);
 
     const actions = document.createElement('div');
     actions.className = 'checklist-actions';
-
+    actions.style.padding = '12px 0';
     const total = Array.from(selectedProducts.values()).reduce((s, v) => s + (v.product.price || 0), 0);
     const addBtn = document.createElement('button');
     addBtn.className = 'btn btn-primary checklist-confirm-btn';
-    addBtn.textContent = `Add to Bucket (${selectedProducts.size} items · $${total.toFixed(2)})`;
+    addBtn.textContent = `Add to Bucket (${selectedProducts.size} · ${formatCurrency(total)})`;
     addBtn.disabled = selectedProducts.size === 0;
     addBtn.addEventListener('click', () => {
-      handleProductsConfirmed(selectedProducts);
+      addProductsToBucket(selectedProducts);
       addBtn.disabled = true;
-      addBtn.textContent = 'Added to Bucket!';
+      addBtn.textContent = 'Added!';
       list.querySelectorAll('input').forEach(cb => cb.disabled = true);
     });
     actions.appendChild(addBtn);
-    msg.appendChild(actions);
-
-    chatMessages.appendChild(msg);
-    scrollChatToBottom();
+    sheetProducts.appendChild(actions);
   }
 
-  // Add confirmed products to bucket and check budget
-  function handleProductsConfirmed(selectedProducts) {
-    for (const [key, { product, category }] of selectedProducts) {
+  function addProductsToBucket(selectedProducts) {
+    for (const [, { product, bucket }] of selectedProducts) {
       data.partyBucket.push({
         id: generateId(),
         name: product.name,
         price: product.price || 0,
         store: product.retailer || 'Google Shopping',
-        category: category || 'decorations',
+        bucket: bucket || 'accent_decor',
         quantity: 1,
         url: product.url || '',
         image: product.image || '',
-        rating: product.rating || null,
       });
     }
     saveData(data);
     updateBucketUI();
-
-    // Budget check
-    const total = getBucketTotal();
-    const budget = data.plannerState && data.plannerState.budget;
-    let budgetMsg = `Added ${selectedProducts.size} items to your Party Bucket! Total: $${total.toFixed(2)}.`;
-    if (budget && total > budget) {
-      budgetMsg += `\n\n⚠️ Heads up — your total ($${total.toFixed(2)}) exceeds your budget of $${budget.toFixed(2)} by $${(total - budget).toFixed(2)}. You can adjust quantities or remove items in the Party Bucket.`;
-    } else if (budget) {
-      budgetMsg += `\n\n✅ You're within your $${budget.toFixed(2)} budget with $${(budget - total).toFixed(2)} remaining.`;
-    }
-    addAssistantMessage(budgetMsg);
-
-    // Tell Claude what happened so conversation stays coherent
-    const state = data.plannerState;
-    if (state && state.apiMessages) {
-      state.apiMessages.push({
-        role: 'user',
-        content: `I confirmed ${selectedProducts.size} products and they've been added to my Party Bucket. Total is $${total.toFixed(2)}.${budget ? ` My budget is $${budget.toFixed(2)}.` : ''}`,
-      });
-      saveData(data);
-      sendToLLM();
-    }
+    addChatMessage('assistant', `Added ${selectedProducts.size} items to your bucket! Total: ${formatCurrency(getBucketTotal())}.`);
   }
 
-  // Display shopping list products in the chat
-  function addShoppingListToChat(items, colorPalette) {
-    const msg = document.createElement('div');
-    msg.className = 'chat-message assistant';
-    msg.style.maxWidth = '100%';
+  // ══════════════════════════════════════
+  //  CHAT DRAWER
+  // ══════════════════════════════════════
 
-    // Show color palette if available
-    if (colorPalette && colorPalette.length > 0) {
-      const paletteDiv = document.createElement('div');
-      paletteDiv.className = 'color-palette-bar';
-      colorPalette.forEach(hex => {
-        const swatch = document.createElement('div');
-        swatch.className = 'color-swatch';
-        swatch.style.background = hex;
-        swatch.title = hex;
-        paletteDiv.appendChild(swatch);
-      });
-      msg.appendChild(paletteDiv);
-    }
-
-    const grid = document.createElement('div');
-    grid.className = 'chat-mood-grid';
-
-    items.forEach(item => {
-      grid.appendChild(createMoodItemCard(item));
-    });
-
-    msg.appendChild(grid);
-    chatMessages.appendChild(msg);
+  function openChatDrawer() {
+    state.chatOpen = true;
+    chatDrawer.classList.add('open');
+    chatDrawerBackdrop.classList.remove('hidden');
     scrollChatToBottom();
   }
 
-  // ── Chat Image Upload Handling ──
+  function closeChatDrawer() {
+    state.chatOpen = false;
+    chatDrawer.classList.remove('open');
+    chatDrawerBackdrop.classList.add('hidden');
+  }
 
-  let pendingChatImages = []; // Array of { dataUrl, base64, mediaType }
+  chatOpenBtn.addEventListener('click', openChatDrawer);
+  chatDrawerClose.addEventListener('click', closeChatDrawer);
+  chatDrawerBackdrop.addEventListener('click', closeChatDrawer);
 
-  const chatUploadBtn = document.getElementById('chat-upload-btn');
-  const chatUploadInput = document.getElementById('chat-upload-input');
-  const chatImagePreview = document.getElementById('chat-image-preview');
+  function addChatMessage(role, text) {
+    const el = document.createElement('div');
+    el.className = `chat-message ${role}`;
+    el.innerHTML = escapeHtml(text).replace(/\n/g, '<br>');
+    chatMessages.appendChild(el);
+    data.chatHistory.push({ role, text });
+    saveData(data);
+    scrollChatToBottom();
+  }
 
-  chatUploadBtn.addEventListener('click', () => {
-    chatUploadInput.click();
+  function scrollChatToBottom() {
+    requestAnimationFrame(() => {
+      chatMessages.scrollTop = chatMessages.scrollHeight;
+    });
+  }
+
+  // Chat send
+  chatSendBtn.addEventListener('click', handleChatSend);
+  chatInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleChatSend();
+    }
   });
+
+  // Auto-resize textarea
+  chatInput.addEventListener('input', () => {
+    chatInput.style.height = 'auto';
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
+  });
+
+  async function handleChatSend() {
+    const text = chatInput.value.trim();
+    if (!text && pendingChatImages.length === 0) return;
+
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+
+    if (text) addChatMessage('user', text);
+
+    // Check for theme/inspiration triggers
+    const themeMatch = text.match(/(?:theme|style|looking for|planning a|want a)\s+(.+)/i);
+    if (themeMatch && state.anchors.length > 0) {
+      state.themeName = themeMatch[1].trim();
+      data.themeName = state.themeName;
+      await fetchAndShowInspiration(state.themeName);
+      return;
+    }
+
+    // If user has images pending, treat as inspiration upload
+    if (pendingChatImages.length > 0) {
+      const images = pendingChatImages.map(img => ({
+        base64: img.base64,
+        mediaType: img.mediaType,
+      }));
+      pendingChatImages = [];
+      renderChatImagePreview();
+
+      addChatMessage('assistant', 'Analyzing your images...');
+      const items = await callExtractItems(images, state.anchors);
+      state.extractedItems = items;
+      data.extractedItems = items;
+      saveData(data);
+      closeChatDrawer();
+      renderExtractedItemsInSheet(items);
+      if (items.length > 0) {
+        sheetThemeName.textContent = 'Your Party Items';
+        sheetItemCount.textContent = `${items.length} items found`;
+        setSheetState('half');
+      }
+      return;
+    }
+
+    // Regular chat — send to Claude
+    const contentBlocks = [{ type: 'text', text }];
+    state.apiMessages.push({ role: 'user', content: contentBlocks });
+
+    const typingEl = document.createElement('div');
+    typingEl.className = 'chat-message assistant';
+    typingEl.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    chatMessages.appendChild(typingEl);
+    scrollChatToBottom();
+
+    const result = await callClaude(state.apiMessages);
+    typingEl.remove();
+
+    if (!result || result.error) {
+      addChatMessage('assistant', 'Sorry, something went wrong. ' + (result?.error || ''));
+      return;
+    }
+
+    const content = result.content || [];
+    state.apiMessages.push({ role: 'assistant', content });
+
+    const texts = content.filter(b => b.type === 'text').map(b => b.text);
+    if (texts.length > 0) {
+      addChatMessage('assistant', texts.join('\n'));
+    }
+
+    // Handle tool calls
+    const toolUses = content.filter(b => b.type === 'tool_use');
+    if (toolUses.length > 0) {
+      const toolResults = [];
+      for (const tool of toolUses) {
+        const result = processToolCall(tool);
+        toolResults.push(result);
+      }
+      state.apiMessages.push({ role: 'user', content: toolResults });
+
+      const followUp = await callClaude(state.apiMessages);
+      if (followUp && !followUp.error && followUp.content) {
+        state.apiMessages.push({ role: 'assistant', content: followUp.content });
+        const followTexts = followUp.content.filter(b => b.type === 'text').map(b => b.text);
+        if (followTexts.length > 0) addChatMessage('assistant', followTexts.join('\n'));
+      }
+    }
+
+    // Check if response mentions a theme — offer inspiration search
+    if (state.anchors.length > 0 && state.extractedItems.length === 0) {
+      const responseText = texts.join(' ').toLowerCase();
+      if (responseText.includes('theme') || responseText.includes('style') || responseText.includes('look')) {
+        // Detect theme from conversation
+        const themeKeywords = text.match(/(?:birthday|wedding|baby\s*shower|graduation|retirement|holiday|christmas|halloween|dinner|anniversary|garden|rustic|boho|elegant|tropical|princess|superhero|unicorn|firetruck|frozen|safari)/i);
+        if (themeKeywords) {
+          state.themeName = themeKeywords[0];
+          data.themeName = state.themeName;
+          await fetchAndShowInspiration(state.themeName + ' party decor');
+        }
+      }
+    }
+  }
+
+  function processToolCall(tool) {
+    if (tool.name === 'update_party_bucket') {
+      const inp = tool.input || {};
+      const results = [];
+      for (const action of (inp.actions || [])) {
+        if (action.action === 'add') {
+          data.partyBucket.push({
+            id: generateId(),
+            name: action.item_name,
+            price: action.price || 0,
+            store: action.store || 'Amazon',
+            quantity: 1,
+          });
+          results.push(`Added "${action.item_name}"`);
+        } else if (action.action === 'remove') {
+          const idx = data.partyBucket.findIndex(b =>
+            b.name.toLowerCase().includes(action.item_name.toLowerCase())
+          );
+          if (idx !== -1) {
+            results.push(`Removed "${data.partyBucket[idx].name}"`);
+            data.partyBucket.splice(idx, 1);
+          }
+        }
+      }
+      saveData(data);
+      updateBucketUI();
+      return {
+        type: 'tool_result',
+        tool_use_id: tool.id,
+        content: results.join('. ') + `. Bucket: ${data.partyBucket.length} items, ${formatCurrency(getBucketTotal())}.`,
+      };
+    }
+    return { type: 'tool_result', tool_use_id: tool.id, content: 'Unknown tool.' };
+  }
+
+  // Chat image uploads
+  let pendingChatImages = [];
+
+  chatUploadBtn.addEventListener('click', () => chatUploadInput.click());
 
   chatUploadInput.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files);
-    if (files.length === 0) return;
-
     for (const file of files) {
-      if (!file.type.startsWith('image/')) continue;
-      if (pendingChatImages.length >= 10) break;
-
-      const compressed = await compressImage(file, 800, 0.8);
-      // Extract base64 and media type from data URL
-      const match = compressed.match(/^data:(image\/[^;]+);base64,(.+)$/);
-      if (!match) continue;
-
-      pendingChatImages.push({
-        dataUrl: compressed,
-        base64: match[2],
-        mediaType: match[1],
-      });
+      if (!file.type.startsWith('image/') || pendingChatImages.length >= 10) continue;
+      const dataUrl = await compressImage(file, 800, 0.8);
+      const parsed = dataUrlToBase64(dataUrl);
+      if (parsed) pendingChatImages.push({ ...parsed, dataUrl });
     }
-
     chatUploadInput.value = '';
     renderChatImagePreview();
   });
@@ -1064,1790 +1101,105 @@
       chatImagePreview.innerHTML = '';
       return;
     }
-
     chatImagePreview.classList.remove('hidden');
     chatImagePreview.innerHTML = pendingChatImages.map((img, i) => `
       <div class="chat-preview-thumb">
         <img src="${img.dataUrl}" alt="Upload ${i + 1}">
         <button class="chat-preview-remove" data-idx="${i}">&times;</button>
       </div>
-    `).join('') + `<span class="chat-preview-count">${pendingChatImages.length}/10 images</span>`;
+    `).join('') + `<span style="font-size:0.75rem;color:var(--text-light)">${pendingChatImages.length}/10</span>`;
 
     chatImagePreview.querySelectorAll('.chat-preview-remove').forEach(btn => {
       btn.addEventListener('click', () => {
-        const idx = parseInt(btn.dataset.idx, 10);
-        pendingChatImages.splice(idx, 1);
+        pendingChatImages.splice(parseInt(btn.dataset.idx), 1);
         renderChatImagePreview();
       });
     });
   }
 
-  // After the user selects scenes in LLM mode, send the tool result and show products.
-  async function handleLLMSceneSelection(sceneNames, items) {
-    const state = data.plannerState;
-
-    // Send tool result
-    state.apiMessages.push({
-      role: 'user',
-      content: [
-        {
-          type: 'tool_result',
-          tool_use_id: state.pendingToolId,
-          content: 'The user selected these inspiration scenes: ' + sceneNames + '. Product recommendations have been auto-generated and displayed. Summarize the picks and encourage the user to review and add items to their Party Bucket.',
-        },
-      ],
-    });
-    state.pendingToolId = null;
-    saveData(data);
-
-    // Show products immediately
-    addAssistantMessageWithMoodBoard('', items);
-
-    // Get Claude's commentary
-    const typingEl = document.createElement('div');
-    typingEl.className = 'chat-message assistant';
-    typingEl.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-    chatMessages.appendChild(typingEl);
-    scrollChatToBottom();
-
-    const result = await callClaude(state.apiMessages);
-    typingEl.remove();
-
-    if (result && !result.error && result.content) {
-      const texts = result.content.filter(b => b.type === 'text').map(b => b.text);
-      if (texts.length > 0) {
-        addAssistantMessage(texts.join('\n'));
-      }
-      state.apiMessages.push({ role: 'assistant', content: result.content });
-    }
-
-    state.stage = 'complete';
-    saveData(data);
-
-    if (getApiKey()) {
-      generateImagesForItems(items, state.partyType, state.theme);
-    }
-  }
-
   // ══════════════════════════════════════
-  //  IndexedDB for Image Storage
+  //  BUCKET MANAGEMENT
   // ══════════════════════════════════════
 
-  const DB_NAME = 'partyplanner_images';
-  const DB_VERSION = 1;
-  const STORE_NAME = 'images';
-  let db = null;
-
-  function openDB() {
-    return new Promise((resolve, reject) => {
-      if (db) { resolve(db); return; }
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = (e) => {
-        const database = e.target.result;
-        if (!database.objectStoreNames.contains(STORE_NAME)) {
-          database.createObjectStore(STORE_NAME, { keyPath: 'id' });
-        }
-      };
-      request.onsuccess = (e) => {
-        db = e.target.result;
-        resolve(db);
-      };
-      request.onerror = () => reject(request.error);
-    });
-  }
-
-  function saveImage(id, dataUrl) {
-    return openDB().then(database => {
-      return new Promise((resolve, reject) => {
-        const tx = database.transaction(STORE_NAME, 'readwrite');
-        tx.objectStore(STORE_NAME).put({ id, dataUrl, timestamp: Date.now() });
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-    });
-  }
-
-  function getImage(id) {
-    return openDB().then(database => {
-      return new Promise((resolve, reject) => {
-        const tx = database.transaction(STORE_NAME, 'readonly');
-        const request = tx.objectStore(STORE_NAME).get(id);
-        request.onsuccess = () => resolve(request.result ? request.result.dataUrl : null);
-        request.onerror = () => reject(request.error);
-      });
-    });
-  }
-
-  function deleteImage(id) {
-    return openDB().then(database => {
-      return new Promise((resolve, reject) => {
-        const tx = database.transaction(STORE_NAME, 'readwrite');
-        tx.objectStore(STORE_NAME).delete(id);
-        tx.oncomplete = () => resolve();
-        tx.onerror = () => reject(tx.error);
-      });
-    });
-  }
-
-  // ── Image Compression ──
-
-  function compressImage(file, maxWidth, quality) {
-    maxWidth = maxWidth || 800;
-    quality = quality || 0.7;
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        const img = new Image();
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          let w = img.width;
-          let h = img.height;
-          if (w > maxWidth) {
-            h = Math.round((h * maxWidth) / w);
-            w = maxWidth;
-          }
-          canvas.width = w;
-          canvas.height = h;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(img, 0, 0, w, h);
-          resolve(canvas.toDataURL('image/jpeg', quality));
-        };
-        img.src = e.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  // ── Utility ──
-
-  function escapeHtml(str) {
-    const div = document.createElement('div');
-    div.textContent = str || '';
-    return div.innerHTML;
-  }
-
-  function formatCurrency(amount) {
-    return '$' + Number(amount).toFixed(2);
-  }
-
-  // ── Tab Navigation (removed — single-page MVP) ──
-
-  // ── Modal Helpers ──
-
-  function openModal(id) {
-    document.getElementById(id).classList.remove('hidden');
-  }
-
-  function closeModal(id) {
-    document.getElementById(id).classList.add('hidden');
-  }
-
-  document.querySelectorAll('.modal-close, [data-modal]').forEach(el => {
-    el.addEventListener('click', () => {
-      const modalId = el.dataset.modal;
-      if (modalId) closeModal(modalId);
-    });
-  });
-
-  document.querySelectorAll('.modal').forEach(modal => {
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) closeModal(modal.id);
-    });
-  });
-
-  // ══════════════════════════════════════
-  //  DALL-E Image Generation
-  // ══════════════════════════════════════
-
-  async function generateImageWithDallE(prompt) {
-    const apiKey = getApiKey();
-    if (!apiKey) return null;
-
-    try {
-      const response = await fetch('https://api.openai.com/v1/images/generations', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + apiKey,
-        },
-        body: JSON.stringify({
-          model: 'dall-e-3',
-          prompt: prompt,
-          n: 1,
-          size: '1024x1024',
-          response_format: 'b64_json',
-        }),
-      });
-
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        console.error('DALL-E error:', err);
-        return null;
-      }
-
-      const result = await response.json();
-      if (result.data && result.data[0] && result.data[0].b64_json) {
-        return 'data:image/png;base64,' + result.data[0].b64_json;
-      }
-      return null;
-    } catch (err) {
-      console.error('DALL-E request failed:', err);
-      return null;
-    }
-  }
-
-  function buildImagePrompt(itemName, partyType, theme) {
-    const typeLabel = partyTypeLabels[partyType] || 'party';
-    const themeDesc = theme ? ` with a "${theme}" theme` : '';
-    return `Professional product photography of ${itemName} for a ${typeLabel}${themeDesc}. Clean white background, high quality, styled beautifully for a party supply catalog. No text or watermarks.`;
-  }
-
-  // ══════════════════════════════════════
-  //  INSPIRATION SCENE CATALOG
-  // ══════════════════════════════════════
-  //
-  // Each scene represents a visual "look" — a curated decor setup.
-  // Scenes have pre-tagged products so we can recommend items
-  // based on which scenes the user loves.
-
-  const inspirationScenes = {
-    birthday: [
-      {
-        id: 'bday-balloon-arch',
-        name: 'Balloon Arch Entrance',
-        description: 'A dramatic balloon arch in themed colors welcoming guests at the entrance',
-        emoji: '\u{1F388}\u{1F38A}',
-        imagePrompt: 'Beautiful balloon arch entrance for a birthday party with colorful balloons in pink gold and white, party entrance decoration, professional event photography',
-        products: [
-          { name: 'Balloon Arch Kit', emoji: '\u{1F388}', price: 24.99, category: 'decorations' },
-          { name: 'Balloon Pump', emoji: '\u{1F4A8}', price: 12.99, category: 'decorations' },
-          { name: 'Metallic Gold Balloons Pack of 50', emoji: '\u{1F388}', price: 9.99, category: 'decorations' },
-          { name: 'Balloon Decorating Strip 25ft', emoji: '\u{1F380}', price: 6.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'bday-dessert-table',
-        name: 'Themed Dessert Table',
-        description: 'A beautifully styled dessert table with cake, cupcakes, and coordinated treats',
-        emoji: '\u{1F382}\u{1F9C1}',
-        imagePrompt: 'Stunning birthday dessert table with tiered cake, cupcakes, cake pops, candy jars, themed decorations, professional party photography',
-        products: [
-          { name: 'Tiered Cake Stand', emoji: '\u{1F382}', price: 22.99, category: 'tableware' },
-          { name: 'Cupcake Tower Display', emoji: '\u{1F9C1}', price: 18.99, category: 'tableware' },
-          { name: 'Cake Topper', emoji: '\u{2728}', price: 8.99, category: 'decorations' },
-          { name: 'Dessert Table Backdrop', emoji: '\u{1F3A8}', price: 19.99, category: 'decorations' },
-          { name: 'Candy Jars Set of 6', emoji: '\u{1F36C}', price: 14.99, category: 'tableware' },
-        ],
-      },
-      {
-        id: 'bday-table-setting',
-        name: 'Coordinated Table Setting',
-        description: 'Matching plates, cups, napkins, and centerpieces in your party theme',
-        emoji: '\u{1F37D}\u{1F3A8}',
-        imagePrompt: 'Beautiful themed birthday party table setting with coordinated plates cups napkins centerpieces and party favors, overhead shot, professional event styling',
-        products: [
-          { name: 'Themed Paper Plates Set of 24', emoji: '\u{1F37D}', price: 12.99, category: 'tableware' },
-          { name: 'Themed Paper Cups Set of 24', emoji: '\u{1F964}', price: 9.99, category: 'tableware' },
-          { name: 'Themed Napkins Set of 50', emoji: '\u{1F9FB}', price: 8.99, category: 'tableware' },
-          { name: 'Tablecloth Pack of 3', emoji: '\u{1F3A8}', price: 14.99, category: 'decorations' },
-          { name: 'Table Centerpiece', emoji: '\u{1F490}', price: 16.99, category: 'decorations' },
-          { name: 'Plastic Utensils Set of 72', emoji: '\u{1F374}', price: 10.99, category: 'tableware' },
-        ],
-      },
-      {
-        id: 'bday-photo-zone',
-        name: 'Photo Booth & Backdrop',
-        description: 'An Instagram-worthy photo zone with props, backdrop, and fun accessories',
-        emoji: '\u{1F4F8}\u{1F451}',
-        imagePrompt: 'Fun birthday party photo booth with backdrop, props, balloons and string lights, colorful and Instagram-worthy, professional party setup',
-        products: [
-          { name: 'Photo Booth Backdrop 5x7ft', emoji: '\u{1F4F8}', price: 18.99, category: 'decorations' },
-          { name: 'Photo Booth Props Kit 30pc', emoji: '\u{1F451}', price: 12.49, category: 'entertainment' },
-          { name: 'String Lights 20ft', emoji: '\u{1F4A1}', price: 14.99, category: 'decorations' },
-          { name: 'Polaroid Guest Book Set', emoji: '\u{1F4D6}', price: 16.99, category: 'stationery' },
-        ],
-      },
-      {
-        id: 'bday-party-favors',
-        name: 'Party Favor Station',
-        description: 'A curated display of thank-you bags, treats, and small gifts for guests',
-        emoji: '\u{1F381}\u{1F36D}',
-        imagePrompt: 'Beautiful party favor station with decorated gift bags, candy, small toys, and thank you tags displayed on a styled table, professional event photography',
-        products: [
-          { name: 'Party Favor Bags Pack of 24', emoji: '\u{1F381}', price: 13.99, category: 'favors' },
-          { name: 'Favor Tags & Ribbon Set', emoji: '\u{1F380}', price: 7.99, category: 'favors' },
-          { name: 'Mini Candy Bags 50pc', emoji: '\u{1F36C}', price: 9.99, category: 'favors' },
-          { name: 'Party Hats Pack of 12', emoji: '\u{1F451}', price: 8.99, category: 'accessories' },
-        ],
-      },
-      {
-        id: 'bday-hanging-decor',
-        name: 'Ceiling & Hanging Decor',
-        description: 'Paper lanterns, streamers, and hanging decorations transforming the space',
-        emoji: '\u{1F3AA}\u{1F38A}',
-        imagePrompt: 'Beautiful ceiling decorations for birthday party with paper lanterns, streamers, hanging tissue pom poms and garlands in coordinated colors, looking up perspective',
-        products: [
-          { name: 'Paper Lanterns Set of 10', emoji: '\u{1F3AA}', price: 14.99, category: 'decorations' },
-          { name: 'Tissue Pom Poms Pack of 12', emoji: '\u{1F338}', price: 11.99, category: 'decorations' },
-          { name: 'Crepe Streamers 6 Rolls', emoji: '\u{1F38A}', price: 8.99, category: 'decorations' },
-          { name: 'Birthday Banner Garland', emoji: '\u{1F389}', price: 10.99, category: 'decorations' },
-          { name: 'Confetti Scatter Pack', emoji: '\u{1F38A}', price: 6.99, category: 'decorations' },
-        ],
-      },
-    ],
-    wedding: [
-      {
-        id: 'wed-ceremony-arch',
-        name: 'Ceremony Arch & Flowers',
-        description: 'A stunning floral arch as the centerpiece of the ceremony',
-        emoji: '\u{1F490}\u{1F492}',
-        imagePrompt: 'Beautiful wedding ceremony arch decorated with white and blush flowers, greenery, and flowing fabric, outdoor setting, professional wedding photography',
-        products: [
-          { name: 'Wedding Arch Frame', emoji: '\u{1F492}', price: 45.99, category: 'decorations' },
-          { name: 'Artificial Flower Garland 2-pack', emoji: '\u{1F490}', price: 28.99, category: 'decorations' },
-          { name: 'Sheer Draping Fabric 10 yards', emoji: '\u{1F380}', price: 16.99, category: 'decorations' },
-          { name: 'Greenery Garland 12ft', emoji: '\u{1F33F}', price: 18.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'wed-reception-table',
-        name: 'Elegant Reception Table',
-        description: 'Candlelit reception tables with floral runners, place settings, and gold accents',
-        emoji: '\u{1F56F}\u{1F942}',
-        imagePrompt: 'Elegant wedding reception table with candles, floral centerpiece, gold charger plates, crystal champagne flutes, and silk table runner, warm lighting, professional wedding photography',
-        products: [
-          { name: 'Gold Charger Plates Set of 12', emoji: '\u{1F37D}', price: 34.99, category: 'tableware' },
-          { name: 'Champagne Flutes Pack of 12', emoji: '\u{1F942}', price: 24.99, category: 'tableware' },
-          { name: 'Pillar Candle Holders Set of 12', emoji: '\u{1F56F}', price: 28.99, category: 'decorations' },
-          { name: 'Silk Table Runner 5-pack', emoji: '\u{1F3A8}', price: 22.99, category: 'decorations' },
-          { name: 'Place Card Holders Set of 24', emoji: '\u{1F4DD}', price: 14.99, category: 'stationery' },
-          { name: 'Table Numbers 1-25', emoji: '\u{1F522}', price: 12.99, category: 'stationery' },
-        ],
-      },
-      {
-        id: 'wed-cake-display',
-        name: 'Wedding Cake Display',
-        description: 'An elegant multi-tier cake on a decorated table with cake cutting set',
-        emoji: '\u{1F382}\u{2728}',
-        imagePrompt: 'Beautiful multi-tier white wedding cake on decorated cake table with flowers, cake cutting set, and elegant backdrop, professional wedding photography',
-        products: [
-          { name: 'Cake Stand Pedestal', emoji: '\u{1F382}', price: 26.99, category: 'tableware' },
-          { name: 'Cake Cutting Set', emoji: '\u{1F52A}', price: 18.99, category: 'accessories' },
-          { name: 'Cake Topper', emoji: '\u{2728}', price: 12.99, category: 'decorations' },
-          { name: 'Dessert Plates Set of 50', emoji: '\u{1F37D}', price: 14.99, category: 'tableware' },
-        ],
-      },
-      {
-        id: 'wed-aisle-decor',
-        name: 'Aisle & Seating Decor',
-        description: 'Rose petals down the aisle, chair sashes, and aisle markers',
-        emoji: '\u{1F339}\u{1F380}',
-        imagePrompt: 'Wedding aisle decorated with rose petals, chair sashes, aisle markers with flowers and lanterns, white chairs, professional wedding photography',
-        products: [
-          { name: 'Rose Petals 2000 pcs', emoji: '\u{1F339}', price: 14.99, category: 'decorations' },
-          { name: 'Chair Sashes Pack of 25', emoji: '\u{1F380}', price: 19.99, category: 'decorations' },
-          { name: 'Aisle Runner 100ft', emoji: '\u{1F3A8}', price: 16.99, category: 'decorations' },
-          { name: 'Lantern Aisle Markers Set of 6', emoji: '\u{1F56F}', price: 24.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'wed-guest-favors',
-        name: 'Guest Favors & Keepsakes',
-        description: 'Beautifully wrapped favors, a guest book, and bubbles for the send-off',
-        emoji: '\u{1F381}\u{1F4D6}',
-        imagePrompt: 'Elegant wedding favor table with wrapped favor boxes, guest book with pen, and bubble tubes, white and gold theme, professional wedding photography',
-        products: [
-          { name: 'Wedding Favor Boxes Set of 50', emoji: '\u{1F381}', price: 19.99, category: 'favors' },
-          { name: 'Guest Book & Pen Set', emoji: '\u{1F4D6}', price: 22.99, category: 'stationery' },
-          { name: 'Wedding Bubbles Set of 48', emoji: '\u{1FAE7}', price: 12.99, category: 'entertainment' },
-          { name: 'Satin Ribbon 100 yards', emoji: '\u{1F380}', price: 9.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'wed-fairy-lights',
-        name: 'Fairy Lights & Ambiance',
-        description: 'Twinkling fairy lights, candles, and tulle creating a magical atmosphere',
-        emoji: '\u{2728}\u{1F56F}',
-        imagePrompt: 'Magical wedding venue with fairy lights draped from ceiling, candles on tables, tulle decorations, warm romantic ambiance, professional wedding photography',
-        products: [
-          { name: 'Fairy Lights 100ft', emoji: '\u{2728}', price: 26.99, category: 'decorations' },
-          { name: 'LED Tea Light Candles 36-pack', emoji: '\u{1F56F}', price: 14.99, category: 'decorations' },
-          { name: 'Tulle Roll 100 yards', emoji: '\u{1F3A8}', price: 11.99, category: 'decorations' },
-          { name: 'Hanging Glass Votives Set of 12', emoji: '\u{2728}', price: 19.99, category: 'decorations' },
-        ],
-      },
-    ],
-    babyshower: [
-      {
-        id: 'bs-dessert-table',
-        name: 'Sweet Dessert Display',
-        description: 'Pastel dessert table with themed cookies, cupcakes, and cake',
-        emoji: '\u{1F370}\u{1F9C1}',
-        imagePrompt: 'Adorable baby shower dessert table with pastel themed cake, cupcakes, cookies shaped like baby items, candy jars, and cute decorations, professional event photography',
-        products: [
-          { name: 'Baby Shower Cake Topper', emoji: '\u{1F382}', price: 8.99, category: 'decorations' },
-          { name: 'Cupcake Stand 3-Tier', emoji: '\u{1F9C1}', price: 16.99, category: 'tableware' },
-          { name: 'Cookie Cutter Set - Baby Shapes', emoji: '\u{1F36A}', price: 9.99, category: 'baking' },
-          { name: 'Dessert Labels & Picks 30pc', emoji: '\u{1F4DD}', price: 6.99, category: 'stationery' },
-          { name: 'Candy Jars Set of 4', emoji: '\u{1F36C}', price: 12.99, category: 'tableware' },
-        ],
-      },
-      {
-        id: 'bs-table-setting',
-        name: 'Themed Table Setting',
-        description: 'Coordinated pastel table decor with cute baby-themed plates and centerpieces',
-        emoji: '\u{1F476}\u{1F37D}',
-        imagePrompt: 'Beautiful baby shower table setting with pastel themed plates, cups, napkins, cute centerpieces with baby blocks and stuffed animals, professional event photography',
-        products: [
-          { name: 'Baby Shower Plates Set of 24', emoji: '\u{1F37D}', price: 11.99, category: 'tableware' },
-          { name: 'Baby Shower Cups Set of 24', emoji: '\u{1F964}', price: 9.99, category: 'tableware' },
-          { name: 'Pastel Napkins Set of 50', emoji: '\u{1F9FB}', price: 8.99, category: 'tableware' },
-          { name: 'Centerpiece Baby Blocks Set', emoji: '\u{1F9F1}', price: 14.99, category: 'decorations' },
-          { name: 'Tablecloth Pastel 3-pack', emoji: '\u{1F3A8}', price: 12.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'bs-balloon-garland',
-        name: 'Balloon Garland & Banner',
-        description: 'Soft pastel balloon garland with a "Welcome Baby" banner',
-        emoji: '\u{1F388}\u{1F476}',
-        imagePrompt: 'Pastel balloon garland decoration for baby shower with welcome baby banner, soft pink blue and white balloons, stuffed animals, professional event photography',
-        products: [
-          { name: 'Pastel Balloon Garland Kit', emoji: '\u{1F388}', price: 22.99, category: 'decorations' },
-          { name: 'Welcome Baby Banner', emoji: '\u{1F476}', price: 9.99, category: 'decorations' },
-          { name: 'Balloon Pump', emoji: '\u{1F4A8}', price: 8.99, category: 'decorations' },
-          { name: 'Confetti Balloons 12-pack', emoji: '\u{1F38A}', price: 7.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'bs-games-activities',
-        name: 'Games & Activity Station',
-        description: 'Fun baby shower games, advice cards, and activities for guests',
-        emoji: '\u{1F3B2}\u{1F4DD}',
-        imagePrompt: 'Baby shower game station with activity cards, prediction cards, diaper raffle tickets, and prizes displayed on a decorated table, professional event photography',
-        products: [
-          { name: 'Baby Shower Games Pack (5 games)', emoji: '\u{1F3B2}', price: 14.99, category: 'entertainment' },
-          { name: 'Advice & Wishes Cards 50pc', emoji: '\u{1F4DD}', price: 9.99, category: 'stationery' },
-          { name: 'Diaper Raffle Tickets 50pc', emoji: '\u{1F3AB}', price: 6.99, category: 'entertainment' },
-          { name: 'Prize Gift Set', emoji: '\u{1F381}', price: 18.99, category: 'favors' },
-        ],
-      },
-      {
-        id: 'bs-diaper-cake',
-        name: 'Diaper Cake & Gifts Display',
-        description: 'A stunning diaper cake centerpiece surrounded by wrapped baby gifts',
-        emoji: '\u{1F381}\u{1F476}',
-        imagePrompt: 'Beautiful diaper cake centerpiece for baby shower with ribbons and baby items, surrounded by wrapped gifts, soft pastel styling, professional event photography',
-        products: [
-          { name: 'Diaper Cake Kit', emoji: '\u{1F476}', price: 24.99, category: 'decorations' },
-          { name: 'Baby Gift Wrapping Set', emoji: '\u{1F381}', price: 11.99, category: 'favors' },
-          { name: 'Mommy-to-Be Sash & Tiara', emoji: '\u{1F451}', price: 9.99, category: 'accessories' },
-          { name: 'Photo Props Kit', emoji: '\u{1F4F8}', price: 11.49, category: 'entertainment' },
-        ],
-      },
-    ],
-    graduation: [
-      {
-        id: 'grad-balloon-display',
-        name: 'Congrats Balloon Display',
-        description: 'Cap-shaped balloons, number balloons, and school-color decorations',
-        emoji: '\u{1F393}\u{1F388}',
-        imagePrompt: 'Graduation party balloon display with grad cap balloons, number balloons showing graduation year, school color decorations, professional event photography',
-        products: [
-          { name: 'Grad Cap Foil Balloons 6-pack', emoji: '\u{1F393}', price: 12.99, category: 'decorations' },
-          { name: 'Number Balloons Set', emoji: '\u{1F388}', price: 9.99, category: 'decorations' },
-          { name: 'Graduation Banner', emoji: '\u{1F389}', price: 10.99, category: 'decorations' },
-          { name: 'School Color Balloons 50-pack', emoji: '\u{1F388}', price: 8.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'grad-photo-timeline',
-        name: 'Photo Memory Timeline',
-        description: 'A timeline display showing photos from kindergarten through graduation',
-        emoji: '\u{1F4F8}\u{1F5BC}',
-        imagePrompt: 'Graduation photo memory timeline display showing photos from childhood through graduation hanging on string with clothespins, decorated with school colors',
-        products: [
-          { name: 'Photo Banner Garland with Clips', emoji: '\u{1F4F8}', price: 13.99, category: 'decorations' },
-          { name: 'Photo Display Board', emoji: '\u{1F5BC}', price: 15.99, category: 'decorations' },
-          { name: 'Mini Clothespins 100-pack', emoji: '\u{1F4DD}', price: 5.99, category: 'decorations' },
-          { name: 'Guest Signing Board', emoji: '\u{1F4DD}', price: 17.99, category: 'stationery' },
-        ],
-      },
-      {
-        id: 'grad-table-setup',
-        name: 'Graduation Table Setup',
-        description: 'Themed table with plates, cups, and graduation-themed centerpieces',
-        emoji: '\u{1F37D}\u{1F393}',
-        imagePrompt: 'Graduation party table setting with themed plates cups and napkins, diploma-shaped centerpieces, confetti, school colors, professional event photography',
-        products: [
-          { name: 'Graduation Plates Set of 24', emoji: '\u{1F37D}', price: 12.99, category: 'tableware' },
-          { name: 'Graduation Cups Set of 24', emoji: '\u{1F964}', price: 9.99, category: 'tableware' },
-          { name: 'Graduation Napkins Set of 50', emoji: '\u{1F9FB}', price: 8.99, category: 'tableware' },
-          { name: 'Table Centerpiece Set', emoji: '\u{1F490}', price: 16.99, category: 'decorations' },
-          { name: 'Confetti Scatter Pack', emoji: '\u{1F38A}', price: 6.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'grad-favors',
-        name: 'Grad Party Favors',
-        description: 'Favor boxes shaped like grad caps with treats and thank-you tags',
-        emoji: '\u{1F381}\u{1F393}',
-        imagePrompt: 'Graduation party favor station with cap-shaped favor boxes, treats, thank you tags, and small gifts on decorated table, professional event photography',
-        products: [
-          { name: 'Grad Cap Favor Boxes 24-pack', emoji: '\u{1F381}', price: 14.99, category: 'favors' },
-          { name: 'Thank You Tags 50pc', emoji: '\u{1F4DD}', price: 6.99, category: 'stationery' },
-          { name: 'Star String Lights 15ft', emoji: '\u{2B50}', price: 12.99, category: 'decorations' },
-          { name: 'Congratulations Cake Topper', emoji: '\u{1F382}', price: 8.99, category: 'decorations' },
-        ],
-      },
-    ],
-    retirement: [
-      {
-        id: 'ret-gold-decor',
-        name: 'Gold & Elegant Decor',
-        description: 'Gold balloons, banner, and sophisticated table decor for a classy celebration',
-        emoji: '\u{1F388}\u{1F3C6}',
-        imagePrompt: 'Elegant retirement party with gold and black balloons, Happy Retirement banner, sophisticated table decorations, candles, professional event photography',
-        products: [
-          { name: 'Gold Balloon Set 30-pack', emoji: '\u{1F388}', price: 11.99, category: 'decorations' },
-          { name: 'Happy Retirement Banner', emoji: '\u{1F3C6}', price: 10.99, category: 'decorations' },
-          { name: 'Gold Tablecloth 3-pack', emoji: '\u{1F3A8}', price: 12.99, category: 'decorations' },
-          { name: 'Candle Centerpiece Set', emoji: '\u{1F56F}', price: 18.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'ret-memory-display',
-        name: 'Career Memory Wall',
-        description: 'Photo display celebrating career milestones and memories',
-        emoji: '\u{1F5BC}\u{1F4D6}',
-        imagePrompt: 'Retirement party memory wall with career photos, milestone timeline, guest book, and heartfelt messages on a decorated display, professional event photography',
-        products: [
-          { name: 'Memory Book & Guestbook', emoji: '\u{1F4D6}', price: 18.99, category: 'stationery' },
-          { name: 'Photo Display Board', emoji: '\u{1F5BC}', price: 15.99, category: 'decorations' },
-          { name: 'Retirement Wishes Cards 50pc', emoji: '\u{1F4DD}', price: 9.99, category: 'stationery' },
-          { name: 'Gold Photo Clips 30-pack', emoji: '\u{1F4F8}', price: 7.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'ret-table-setting',
-        name: 'Retirement Table Setting',
-        description: 'Sophisticated table with gold-rimmed plates and elegant napkins',
-        emoji: '\u{1F37D}\u{2728}',
-        imagePrompt: 'Sophisticated retirement party table with gold rimmed plates, elegant napkins, champagne glasses, and classy centerpiece, professional event photography',
-        products: [
-          { name: 'Gold-Rimmed Plates Set of 24', emoji: '\u{1F37D}', price: 16.99, category: 'tableware' },
-          { name: 'Champagne Cups Set of 24', emoji: '\u{1F964}', price: 11.99, category: 'tableware' },
-          { name: 'Elegant Napkins Set of 50', emoji: '\u{1F9FB}', price: 9.99, category: 'tableware' },
-          { name: 'Table Centerpiece', emoji: '\u{1F490}', price: 17.99, category: 'decorations' },
-          { name: 'Retirement Cake Topper', emoji: '\u{1F382}', price: 8.99, category: 'decorations' },
-        ],
-      },
-    ],
-    holiday: [
-      {
-        id: 'hol-table-setting',
-        name: 'Festive Table Setting',
-        description: 'Holiday-themed table with seasonal plates, garland runner, and candles',
-        emoji: '\u{1F384}\u{1F56F}',
-        imagePrompt: 'Festive holiday party table setting with seasonal plates, garland table runner, candles, ornaments, and warm lighting, professional event photography',
-        products: [
-          { name: 'Holiday Plates Set of 24', emoji: '\u{1F37D}', price: 12.99, category: 'tableware' },
-          { name: 'Holiday Cups Set of 24', emoji: '\u{1F964}', price: 9.99, category: 'tableware' },
-          { name: 'Festive Napkins Set of 50', emoji: '\u{1F9FB}', price: 8.99, category: 'tableware' },
-          { name: 'Garland Table Runner 6ft', emoji: '\u{1F33F}', price: 16.99, category: 'decorations' },
-          { name: 'Pillar Candles Set of 6', emoji: '\u{1F56F}', price: 14.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'hol-entrance-decor',
-        name: 'Holiday Entrance & Wreath',
-        description: 'A welcoming entrance with wreath, lights, and festive garland',
-        emoji: '\u{1F33F}\u{1F4A1}',
-        imagePrompt: 'Festive holiday party entrance with wreath on door, twinkling lights, garland, and seasonal decorations, warm and welcoming, professional event photography',
-        products: [
-          { name: 'Wreath 20 inch', emoji: '\u{1F33F}', price: 24.99, category: 'decorations' },
-          { name: 'Holiday Lights 30ft', emoji: '\u{1F4A1}', price: 18.99, category: 'decorations' },
-          { name: 'Holiday Garland 9ft', emoji: '\u{1F384}', price: 16.99, category: 'decorations' },
-          { name: 'Ornament Decor Set of 12', emoji: '\u{1F3AA}', price: 14.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'hol-cookie-station',
-        name: 'Cookie Decorating Station',
-        description: 'An interactive cookie decorating station with icing, sprinkles, and shapes',
-        emoji: '\u{1F36A}\u{1F3A8}',
-        imagePrompt: 'Fun holiday cookie decorating station with various cookie shapes, icing bottles, sprinkles, and decorated cookies on display, professional event photography',
-        products: [
-          { name: 'Cookie Cutter Set - Holiday', emoji: '\u{1F36A}', price: 9.99, category: 'baking' },
-          { name: 'Icing Decorating Kit', emoji: '\u{1F3A8}', price: 12.99, category: 'baking' },
-          { name: 'Sprinkles Assortment 6-pack', emoji: '\u{2728}', price: 8.99, category: 'baking' },
-          { name: 'Cookie Display Stand', emoji: '\u{1F37D}', price: 14.99, category: 'tableware' },
-          { name: 'Holiday Favor Tins 12-pack', emoji: '\u{1F381}', price: 11.99, category: 'favors' },
-        ],
-      },
-    ],
-    dinner: [
-      {
-        id: 'din-elegant-table',
-        name: 'Elegant Place Settings',
-        description: 'Sophisticated place settings with charger plates, wine glasses, and linen napkins',
-        emoji: '\u{1F377}\u{1F37D}',
-        imagePrompt: 'Elegant dinner party table with charger plates, crystal wine glasses, linen napkins with rings, calligraphy place cards, and candles, professional event photography',
-        products: [
-          { name: 'Charger Plates Set of 12', emoji: '\u{1F37D}', price: 34.99, category: 'tableware' },
-          { name: 'Wine Glasses Set of 12', emoji: '\u{1F377}', price: 28.99, category: 'tableware' },
-          { name: 'Linen Napkins Set of 12', emoji: '\u{1F9FB}', price: 19.99, category: 'tableware' },
-          { name: 'Napkin Rings Set of 12', emoji: '\u{1F380}', price: 12.99, category: 'tableware' },
-          { name: 'Place Card Holders Set of 12', emoji: '\u{1F4DD}', price: 11.99, category: 'stationery' },
-        ],
-      },
-      {
-        id: 'din-centerpiece',
-        name: 'Floral Centerpieces & Candles',
-        description: 'Low floral arrangements with pillar candles creating warm ambiance',
-        emoji: '\u{1F490}\u{1F56F}',
-        imagePrompt: 'Beautiful dinner party centerpiece with low floral arrangement, pillar candles, greenery, and elegant vases on table runner, warm lighting, professional event photography',
-        products: [
-          { name: 'Centerpiece Vase Set of 3', emoji: '\u{1F490}', price: 22.99, category: 'decorations' },
-          { name: 'Pillar Candles Set of 6', emoji: '\u{1F56F}', price: 16.99, category: 'decorations' },
-          { name: 'Table Runner 90 inch', emoji: '\u{1F3A8}', price: 14.99, category: 'decorations' },
-          { name: 'Fairy Lights 20ft', emoji: '\u{2728}', price: 12.99, category: 'decorations' },
-          { name: 'Eucalyptus Garland 6ft', emoji: '\u{1F33F}', price: 14.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'din-bar-cart',
-        name: 'Bar & Cocktail Setup',
-        description: 'A styled bar area with cocktail tools, garnishes, and menu cards',
-        emoji: '\u{1F378}\u{1F3A8}',
-        imagePrompt: 'Stylish dinner party bar cart with cocktail tools, garnishes, drink menu cards, elegant glasses and bottles, professional event photography',
-        products: [
-          { name: 'Cocktail Stirrers 50pc', emoji: '\u{1F378}', price: 8.99, category: 'accessories' },
-          { name: 'Menu Card Templates 25pc', emoji: '\u{1F4C4}', price: 10.99, category: 'stationery' },
-          { name: 'Cocktail Napkins Set of 100', emoji: '\u{1F9FB}', price: 9.99, category: 'tableware' },
-          { name: 'Ice Bucket & Tongs', emoji: '\u{1F9CA}', price: 16.99, category: 'accessories' },
-        ],
-      },
-    ],
-    anniversary: [
-      {
-        id: 'ann-romantic-table',
-        name: 'Romantic Table Setting',
-        description: 'Rose petals, candles, champagne flutes, and elegant place settings',
-        emoji: '\u{1F339}\u{1F56F}',
-        imagePrompt: 'Romantic anniversary dinner table with rose petals, candles, champagne flutes, elegant plates, and soft lighting, professional event photography',
-        products: [
-          { name: 'Rose Petals 1000 pcs', emoji: '\u{1F339}', price: 11.99, category: 'decorations' },
-          { name: 'Candle Holders Set of 6', emoji: '\u{1F56F}', price: 18.99, category: 'decorations' },
-          { name: 'Champagne Flutes Set of 12', emoji: '\u{1F942}', price: 22.99, category: 'tableware' },
-          { name: 'Anniversary Plates Set of 24', emoji: '\u{1F37D}', price: 14.99, category: 'tableware' },
-          { name: 'Anniversary Napkins Set of 50', emoji: '\u{1F9FB}', price: 9.99, category: 'tableware' },
-        ],
-      },
-      {
-        id: 'ann-photo-display',
-        name: 'Photo Memory Display',
-        description: 'A timeline of photos through the years with a guest signing canvas',
-        emoji: '\u{1F5BC}\u{1F495}',
-        imagePrompt: 'Anniversary photo timeline display with couple photos through the years, fairy lights, heart decorations, and guest signing canvas, professional event photography',
-        products: [
-          { name: 'Photo Display Banner with Clips', emoji: '\u{1F5BC}', price: 14.99, category: 'decorations' },
-          { name: 'Guest Signing Canvas', emoji: '\u{1F4DD}', price: 19.99, category: 'stationery' },
-          { name: 'Fairy Lights 30ft', emoji: '\u{2728}', price: 15.99, category: 'decorations' },
-          { name: 'Heart Confetti Pack', emoji: '\u{1F495}', price: 6.99, category: 'decorations' },
-        ],
-      },
-      {
-        id: 'ann-balloon-decor',
-        name: 'Balloon & Banner Display',
-        description: 'Heart balloons, anniversary banner, and party decorations',
-        emoji: '\u{1F388}\u{1F495}',
-        imagePrompt: 'Anniversary party decorations with heart shaped balloons, happy anniversary banner, gold accents, and elegant balloon arrangement, professional event photography',
-        products: [
-          { name: 'Heart Balloons Pack of 24', emoji: '\u{1F388}', price: 10.99, category: 'decorations' },
-          { name: 'Anniversary Banner', emoji: '\u{1F495}', price: 10.99, category: 'decorations' },
-          { name: 'Party Favor Boxes Pack of 24', emoji: '\u{1F381}', price: 11.99, category: 'favors' },
-          { name: 'Cake Topper "Anniversary"', emoji: '\u{1F382}', price: 9.99, category: 'decorations' },
-        ],
-      },
-    ],
-  };
-
-  // ══════════════════════════════════════
-  //  DIY AI PLANNER
-  // ══════════════════════════════════════
-
-  const partyTypeLabels = {
-    birthday: 'Birthday Party',
-    wedding: 'Wedding',
-    babyshower: 'Baby Shower',
-    graduation: 'Graduation Party',
-    retirement: 'Retirement Party',
-    holiday: 'Holiday Party',
-    dinner: 'Dinner Party',
-    anniversary: 'Anniversary',
-  };
-
-  const partyTypeEmojis = {
-    birthday: '\u{1F382}',
-    wedding: '\u{1F492}',
-    babyshower: '\u{1F476}',
-    graduation: '\u{1F393}',
-    retirement: '\u{1F3C6}',
-    holiday: '\u{1F384}',
-    dinner: '\u{1F37D}',
-    anniversary: '\u{1F495}',
-  };
-
-  // Category color map for product card visuals (replaces emoji)
-  const categoryStyles = {
-    decorations: { gradient: 'linear-gradient(135deg, #ffecd2, #fcb69f)', label: 'Decor' },
-    tableware:   { gradient: 'linear-gradient(135deg, #a1c4fd, #c2e9fb)', label: 'Tableware' },
-    entertainment: { gradient: 'linear-gradient(135deg, #d4fc79, #96e6a1)', label: 'Fun' },
-    favors:      { gradient: 'linear-gradient(135deg, #f093fb, #f5576c)', label: 'Favors' },
-    stationery:  { gradient: 'linear-gradient(135deg, #fff1c1, #f7c948)', label: 'Stationery' },
-    accessories: { gradient: 'linear-gradient(135deg, #667eea, #764ba2)', label: 'Accessories' },
-    baking:      { gradient: 'linear-gradient(135deg, #f6d365, #fda085)', label: 'Baking' },
-    lighting:    { gradient: 'linear-gradient(135deg, #ffecd2, #fcb69f)', label: 'Lighting' },
-    florals:     { gradient: 'linear-gradient(135deg, #f5c6ec, #fce4ec)', label: 'Florals' },
-  };
-
-  function getCategoryStyle(category) {
-    return categoryStyles[category] || { gradient: 'linear-gradient(135deg, #dfe6e9, #b2bec3)', label: category || 'Item' };
-  }
-
-  // Conversational planner — no rigid state machine.
-  // The agent tracks what info it still needs and detects user intent.
-
-  function initPlannerState(partyType, userPrompt) {
-    return {
-      partyType: partyType || 'other',
-      theme: userPrompt || '',
-      guestCount: null,
-      budget: null,
-      isDIY: null,
-      selectedScenes: [],
-      stage: partyType && userPrompt ? 'ask-guests' : 'ask-theme',
-    };
-  }
-
-  // ── Planner UI Elements ──
-  const plannerLanding = document.getElementById('planner-landing');
-  const plannerChat = document.getElementById('planner-chat');
-  const chatMessages = document.getElementById('chat-messages');
-  const chatInput = document.getElementById('chat-input');
-  const plannerInput = document.getElementById('planner-input');
-
-  // ── Start Planner from Landing ──
-
-  document.getElementById('planner-send-btn').addEventListener('click', () => {
-    const text = plannerInput.value.trim();
-    if (!text) return;
-    const detected = detectPartyType(text);
-    startPlanner(detected, text);
-  });
-
-  plannerInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      document.getElementById('planner-send-btn').click();
-    }
-  });
-
-  document.querySelectorAll('.quick-pick-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const type = btn.dataset.type;
-      startPlanner(type, '');
-    });
-  });
-
-  function detectPartyType(text) {
-    const lower = text.toLowerCase();
-    if (lower.includes('birthday')) return 'birthday';
-    if (lower.includes('wedding')) return 'wedding';
-    if (lower.includes('baby shower') || lower.includes('babyshower')) return 'babyshower';
-    if (lower.includes('graduation') || lower.includes('grad party')) return 'graduation';
-    if (lower.includes('retirement')) return 'retirement';
-    if (lower.includes('holiday') || lower.includes('christmas') || lower.includes('halloween')) return 'holiday';
-    if (lower.includes('dinner')) return 'dinner';
-    if (lower.includes('anniversary')) return 'anniversary';
-    return 'birthday';
-  }
-
-  function startPlanner(partyType, userPrompt) {
-    data.plannerState = initPlannerState(partyType, userPrompt);
-    data.plannerState.apiMessages = [];
-    data.chatHistory = [];
-    data.moodBoardItems = [];
-    saveData(data);
-
-    plannerLanding.classList.add('hidden');
-    plannerChat.classList.remove('hidden');
-
-    const label = partyTypeLabels[partyType] || 'Party';
-    document.getElementById('planner-party-title').textContent = label + ' Planner';
-
-    chatMessages.innerHTML = '';
-
-    if (isLLMMode()) {
-      // LLM-powered flow
-      const firstMsg = userPrompt || ('I want to plan a ' + (partyTypeLabels[partyType] || 'party'));
-      addChatMessage('user', firstMsg);
-      data.plannerState.apiMessages.push({ role: 'user', content: firstMsg });
-      saveData(data);
-      sendToLLM();
-    } else {
-      // Fallback: hardcoded flow
-      if (userPrompt) addChatMessage('user', userPrompt);
-      advancePlanner();
-    }
-  }
-
-  function advancePlanner() {
-    const state = data.plannerState;
-    if (!state) return;
-
-    switch (state.stage) {
-      case 'ask-theme': {
-        const label = partyTypeLabels[state.partyType] || 'party';
-        showTypingThen(() => {
-          addAssistantMessage(
-            `Great choice! Let's plan an amazing ${label}! \n\nWhat theme or style do you have in mind? For example, a color scheme, character theme, or a vibe like "rustic" or "elegant".`,
-            [
-              { text: 'Elegant & Classic', value: 'elegant and classic theme' },
-              { text: 'Rustic & Natural', value: 'rustic and natural theme' },
-              { text: 'Fun & Colorful', value: 'fun and colorful theme' },
-              { text: 'Minimalist & Modern', value: 'minimalist and modern theme' },
-            ]
-          );
-        });
-        break;
-      }
-      case 'ask-guests': {
-        showTypingThen(() => {
-          const themeDesc = state.theme ? `Love the "${escapeHtml(state.theme)}" theme! ` : '';
-          addAssistantMessage(
-            `${themeDesc}How many people are you expecting?`,
-            [
-              { text: '10-20 people', value: '15' },
-              { text: '20-50 people', value: '35' },
-              { text: '50-100 people', value: '75' },
-              { text: '100+ people', value: '120' },
-            ]
-          );
-        });
-        break;
-      }
-      case 'ask-budget': {
-        showTypingThen(() => {
-          addAssistantMessage(
-            `Planning for ${state.guestCount} guests! What's your approximate budget?`,
-            [
-              { text: 'Under $200', value: '150' },
-              { text: '$200 - $500', value: '350' },
-              { text: '$500 - $1,000', value: '750' },
-              { text: '$1,000 - $2,500', value: '1750' },
-              { text: '$2,500+', value: '3000' },
-            ]
-          );
-        });
-        break;
-      }
-      case 'ask-diy': {
-        showTypingThen(() => {
-          addAssistantMessage(
-            `Budget of ${formatCurrency(state.budget)} \u2014 got it! Last question: Are you doing this DIY or with a coordinator?`,
-            [
-              { text: 'DIY \u2014 Doing it myself!', value: 'DIY' },
-              { text: 'I have a coordinator', value: 'coordinator' },
-            ]
-          );
-        });
-        break;
-      }
-      case 'show-inspiration': {
-        showTypingThen(() => {
-          const scenes = inspirationScenes[state.partyType] || inspirationScenes.birthday;
-          const themeLabel = state.theme ? ` with your "${escapeHtml(state.theme)}" vibe` : '';
-          addAssistantMessage(
-            `Here's some inspiration for your ${partyTypeLabels[state.partyType] || 'party'}${themeLabel}! \n\nTap the scenes you love \u2014 I'll use your picks to recommend exactly what to buy.`
-          );
-          addInspirationGrid(scenes);
-        }, 1200);
-        break;
-      }
-      case 'generate': {
-        showTypingThen(() => {
-          const items = data.moodBoardItems || [];
-          const sceneCount = state.selectedScenes.length;
-          addAssistantMessage(
-            `Based on the ${sceneCount} look${sceneCount > 1 ? 's' : ''} you picked, here's what I recommend to bring it to life! Click "Add to Bucket" on the ones you want.`
-          );
-
-          addAssistantMessageWithMoodBoard('', items);
-
-          state.stage = 'complete';
-          saveData(data);
-
-          if (getApiKey()) {
-            generateImagesForItems(items, state.partyType, state.theme);
-          }
-        }, 1500);
-        break;
-      }
-      case 'complete': {
-        break;
-      }
-    }
-  }
-
-  // ══════════════════════════════════════
-  //  INSPIRATION SCENE GRID (Multi-Select)
-  // ══════════════════════════════════════
-
-  function addInspirationGrid(scenes) {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'chat-message assistant';
-    wrapper.style.maxWidth = '100%';
-
-    const grid = document.createElement('div');
-    grid.className = 'inspiration-grid';
-
-    const selected = new Set();
-
-    scenes.forEach(scene => {
-      const card = document.createElement('div');
-      card.className = 'inspiration-card';
-      card.id = 'inspiration-' + scene.id;
-
-      const hasApiKey = !!getApiKey();
-      let visualContent;
-      if (hasApiKey) {
-        visualContent = '<div class="img-loading"><div class="spinner"></div><span>Loading...</span></div>';
-      } else {
-        visualContent = `<span class="inspiration-emoji">${scene.emoji}</span>`;
-      }
-
-      card.innerHTML = `
-        <div class="inspiration-visual">${visualContent}</div>
-        <div class="inspiration-check">\u2713</div>
-        <div class="inspiration-info">
-          <span class="inspiration-name">${escapeHtml(scene.name)}</span>
-          <span class="inspiration-desc">${escapeHtml(scene.description)}</span>
-        </div>
-      `;
-
-      card.addEventListener('click', () => {
-        if (selected.has(scene.id)) {
-          selected.delete(scene.id);
-          card.classList.remove('selected');
-        } else {
-          selected.add(scene.id);
-          card.classList.add('selected');
-        }
-        // Update continue button
-        updateContinueButton(selected.size);
-      });
-
-      grid.appendChild(card);
-
-      // Load AI image if available
-      if (hasApiKey) {
-        const cacheKey = 'scene_' + scene.id;
-        getImage(cacheKey).then(cached => {
-          if (cached) {
-            updateSceneImage(scene.id, cached);
-          } else {
-            generateImageWithDallE(scene.imagePrompt).then(imgData => {
-              if (imgData) {
-                saveImage(cacheKey, imgData).catch(() => {});
-                updateSceneImage(scene.id, imgData);
-              }
-            });
-          }
-        }).catch(() => {});
-      }
-    });
-
-    wrapper.appendChild(grid);
-
-    // Continue button
-    const btnContainer = document.createElement('div');
-    btnContainer.className = 'inspiration-actions';
-    btnContainer.id = 'inspiration-continue-container';
-
-    const continueBtn = document.createElement('button');
-    continueBtn.className = 'btn btn-primary inspiration-continue-btn';
-    continueBtn.id = 'inspiration-continue-btn';
-    continueBtn.textContent = 'Select at least 1 scene to continue';
-    continueBtn.disabled = true;
-
-    continueBtn.addEventListener('click', () => {
-      if (selected.size === 0) return;
-
-      const state = data.plannerState;
-      state.selectedScenes = Array.from(selected);
-      saveData(data);
-
-      // Show user's selection as a message
-      const sceneNames = state.selectedScenes
-        .map(sid => {
-          const allScenes = inspirationScenes[state.partyType] || [];
-          const s = allScenes.find(sc => sc.id === sid);
-          return s ? s.name : sid;
-        })
-        .join(', ');
-      addChatMessage('user', `I love these: ${sceneNames}`);
-
-      // Disable further selection
-      grid.querySelectorAll('.inspiration-card').forEach(c => {
-        c.style.pointerEvents = 'none';
-      });
-      continueBtn.disabled = true;
-      continueBtn.textContent = 'Generating recommendations...';
-
-      // Generate products from selected scenes
-      const items = generateProductsFromScenes(state);
-      data.moodBoardItems = items;
-      saveData(data);
-
-      if (isLLMMode() && state.pendingToolId) {
-        handleLLMSceneSelection(sceneNames, items);
-      } else {
-        state.stage = 'generate';
-        saveData(data);
-        advancePlanner();
-      }
-    });
-
-    btnContainer.appendChild(continueBtn);
-    wrapper.appendChild(btnContainer);
-
-    chatMessages.appendChild(wrapper);
-    scrollChatToBottom();
-  }
-
-  function updateContinueButton(count) {
-    const btn = document.getElementById('inspiration-continue-btn');
-    if (!btn) return;
-    if (count > 0) {
-      btn.disabled = false;
-      btn.textContent = `Continue with ${count} scene${count > 1 ? 's' : ''} selected`;
-    } else {
-      btn.disabled = true;
-      btn.textContent = 'Select at least 1 scene to continue';
-    }
-  }
-
-  function updateSceneImage(sceneId, imageDataUrl) {
-    const card = document.getElementById('inspiration-' + sceneId);
-    if (!card) return;
-    const visual = card.querySelector('.inspiration-visual');
-    if (!visual) return;
-    visual.innerHTML = '<img src="' + imageDataUrl + '" alt="Inspiration" loading="lazy">';
-  }
-
-  // ══════════════════════════════════════
-  //  PRODUCT GENERATION FROM SCENES
-  // ══════════════════════════════════════
-
-  function generateProductsFromScenes(state) {
-    // Use AI-generated scenes if available, otherwise fall back to hardcoded catalog
-    const scenes = state.generatedScenes || inspirationScenes[state.partyType] || inspirationScenes.birthday;
-    const selectedIds = state.selectedScenes || [];
-
-    // Collect products from all selected scenes, dedupe by name
-    const productMap = new Map();
-    selectedIds.forEach(sceneId => {
-      const scene = scenes.find(s => s.id === sceneId);
-      if (!scene) return;
-      scene.products.forEach(p => {
-        if (!productMap.has(p.name)) {
-          productMap.set(p.name, { ...p });
-        }
-      });
-    });
-
-    // Assign a retailer per item deterministically based on product name
-    return Array.from(productMap.values()).map(p => {
-      const storeIdx = Math.abs(hashString(p.name)) % storeNames.length;
-      return {
-        id: generateId(),
-        name: p.name,
-        price: p.price,
-        store: storeNames[storeIdx],
-        category: p.category,
-      };
-    });
-  }
-
-  function hashString(str) {
-    let hash = 0;
-    for (let i = 0; i < str.length; i++) {
-      hash = ((hash << 5) - hash) + str.charCodeAt(i);
-      hash |= 0;
-    }
-    return hash;
-  }
-
-  // ── Background Image Generation ──
-
-  async function generateImagesForItems(items, partyType, theme) {
-    for (const item of items) {
-      const cacheKey = 'img_' + item.id;
-      const cached = await getImage(cacheKey).catch(() => null);
-      if (cached) {
-        updateCardImage('mood-item-' + item.id, cached);
-        updateCardImage('moodboard-card-' + item.id, cached);
-        continue;
-      }
-      const prompt = buildImagePrompt(item.name, partyType, theme);
-      const imageData = await generateImageWithDallE(prompt);
-      if (imageData) {
-        await saveImage(cacheKey, imageData).catch(() => {});
-        updateCardImage('mood-item-' + item.id, imageData);
-        updateCardImage('moodboard-card-' + item.id, imageData);
-      }
-    }
-  }
-
-  function updateCardImage(cardId, imageDataUrl) {
-    const card = document.getElementById(cardId);
-    if (!card) return;
-    const visual = card.querySelector('.mood-item-visual, .moodboard-card-visual');
-    if (!visual) return;
-    visual.innerHTML = '<img src="' + imageDataUrl + '" alt="Mood board image" loading="lazy">';
-  }
-
-  // ── Chat Input Handling ──
-
-  document.getElementById('chat-send-btn').addEventListener('click', handleChatSend);
-  chatInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleChatSend();
-    }
-  });
-
-  function handleChatSend() {
-    const text = chatInput.value.trim();
-    const hasImages = pendingChatImages.length > 0;
-    if (!text && !hasImages) return;
-    chatInput.value = '';
-
-    // Show user message with image thumbnails if any
-    if (hasImages) {
-      addChatMessageWithImages(text, pendingChatImages);
-    } else {
-      addChatMessage('user', text);
-    }
-
-    if (isLLMMode() && data.plannerState && data.plannerState.apiMessages) {
-      // Build content blocks: images first, then text
-      const contentBlocks = [];
-
-      for (const img of pendingChatImages) {
-        contentBlocks.push({
-          type: 'image',
-          source: {
-            type: 'base64',
-            media_type: img.mediaType,
-            data: img.base64,
-          },
-        });
-      }
-
-      if (text) {
-        contentBlocks.push({ type: 'text', text: text });
-      } else if (hasImages) {
-        contentBlocks.push({ type: 'text', text: `I've uploaded ${pendingChatImages.length} inspiration image(s). Please analyze them and help me plan my party based on what you see.` });
-      }
-
-      data.plannerState.apiMessages.push({ role: 'user', content: contentBlocks });
-
-      // Clear pending images
-      pendingChatImages = [];
-      renderChatImagePreview();
-
-      saveData(data);
-      sendToLLM();
-    } else {
-      pendingChatImages = [];
-      renderChatImagePreview();
-      processUserInput(text);
-    }
-  }
-
-  function addChatMessageWithImages(text, images) {
-    data.chatHistory.push({ role: 'user', text: text || `[${images.length} image(s) uploaded]` });
-    saveData(data);
-
-    const msg = document.createElement('div');
-    msg.className = 'chat-message user';
-
-    if (images.length > 0) {
-      const thumbsDiv = document.createElement('div');
-      thumbsDiv.className = 'chat-msg-thumbs';
-      images.forEach(img => {
-        const thumb = document.createElement('img');
-        thumb.src = img.dataUrl;
-        thumb.className = 'chat-msg-thumb';
-        thumb.alt = 'Uploaded image';
-        thumbsDiv.appendChild(thumb);
-      });
-      msg.appendChild(thumbsDiv);
-    }
-
-    if (text) {
-      const textEl = document.createElement('div');
-      textEl.innerHTML = escapeHtml(text).replace(/\n/g, '<br>');
-      msg.appendChild(textEl);
-    }
-
-    chatMessages.appendChild(msg);
-    scrollChatToBottom();
-  }
-
-  // ── Intent Detection ──
-  // Understands what the user is saying regardless of current stage.
-
-  function detectIntent(text) {
-    const lower = text.toLowerCase().trim();
-
-    // Detect explicit party type mention → user wants to change/set theme
-    const typeKeywords = {
-      birthday: ['birthday', 'bday', 'b-day'],
-      wedding: ['wedding', 'bridal'],
-      babyshower: ['baby shower', 'babyshower'],
-      graduation: ['graduation', 'grad party', 'commencement'],
-      retirement: ['retirement', 'retiring'],
-      holiday: ['holiday', 'christmas', 'halloween', 'thanksgiving', 'new year'],
-      dinner: ['dinner party', 'dinner gathering', 'supper'],
-      anniversary: ['anniversary'],
-    };
-
-    // Detect correction / "go back" intent
-    if (/\b(change|switch|go back|redo|actually|instead|wait|no i meant|i meant)\b/.test(lower)) {
-      // Check if they're changing the party type specifically
-      for (const [type, kws] of Object.entries(typeKeywords)) {
-        if (kws.some(k => lower.includes(k))) {
-          return { intent: 'switch-party-type', partyType: type, raw: text };
-        }
-      }
-      // Check if changing theme
-      if (/theme|style|vibe|look/.test(lower)) {
-        return { intent: 'change-theme', raw: text };
-      }
-      // Check if changing guest count
-      if (/guests?|people|headcount/.test(lower)) {
-        const num = parseInt((lower.match(/(\d+)/) || [])[1], 10);
-        return { intent: 'set-guests', count: num || null, raw: text };
-      }
-      // Check if changing budget
-      if (/budget|spend|cost|price/.test(lower)) {
-        const amt = parseFloat((lower.match(/[\$]?\s*([\d,]+\.?\d*)/) || [])[1]);
-        return { intent: 'set-budget', amount: amt || null, raw: text };
-      }
-      // Generic correction — re-ask current question
-      return { intent: 'correction', raw: text };
-    }
-
-    // Detect guest count anywhere (e.g. "30 people", "expecting 50 guests")
-    const guestMatch = lower.match(/(\d+)\s*(people|guests?|persons?|folks|attendees?|friends|family)/);
-    if (guestMatch) {
-      return { intent: 'set-guests', count: parseInt(guestMatch[1], 10), raw: text };
-    }
-
-    // Detect budget anywhere (e.g. "$500", "budget is 1000", "spend about 300")
-    if (/budget|spend|afford|cost/.test(lower)) {
-      const amt = parseFloat((lower.match(/[\$]?\s*([\d,]+\.?\d*)/) || [])[1]);
-      if (amt > 0) return { intent: 'set-budget', amount: amt, raw: text };
-    }
-
-    // Detect DIY preference
-    if (/\b(diy|do it myself|doing it myself|on my own|by myself)\b/.test(lower)) {
-      return { intent: 'set-diy', isDIY: true, raw: text };
-    }
-    if (/\b(coordinator|planner|professional|hired help|event planner)\b/.test(lower)) {
-      return { intent: 'set-diy', isDIY: false, raw: text };
-    }
-
-    // Detect "more options" / "show different"
-    if (/\b(more|different|other|another|regenerate|again|redo)\b/.test(lower) && /\b(option|scene|inspiration|look|idea|style|choice)\b/.test(lower)) {
-      return { intent: 'more-options', raw: text };
-    }
-
-    // Detect "start over"
-    if (/\b(start over|restart|begin again|new plan)\b/.test(lower)) {
-      return { intent: 'restart', raw: text };
-    }
-
-    // Check for a party type mention without a correction keyword
-    for (const [type, kws] of Object.entries(typeKeywords)) {
-      if (kws.some(k => lower.includes(k))) {
-        return { intent: 'set-theme-type', partyType: type, raw: text };
-      }
-    }
-
-    // Default — treat as a direct answer to whatever the agent last asked
-    return { intent: 'answer', raw: text };
-  }
-
-  function processUserInput(text) {
-    const state = data.plannerState;
-    if (!state) return;
-
-    const intent = detectIntent(text);
-
-    // ── Handle intents that work regardless of current stage ──
-
-    if (intent.intent === 'restart') {
-      showTypingThen(() => {
-        addAssistantMessage("No problem! Let's start fresh. What kind of party are you planning?");
-      });
-      state.stage = 'ask-theme';
-      state.theme = '';
-      state.guestCount = null;
-      state.budget = null;
-      state.isDIY = null;
-      state.selectedScenes = [];
-      saveData(data);
-      return;
-    }
-
-    if (intent.intent === 'switch-party-type') {
-      const oldType = state.partyType;
-      state.partyType = intent.partyType;
-      state.theme = text;
-      state.selectedScenes = [];
-      // Keep answers the user already gave, just move forward
-      if (!state.guestCount) {
-        state.stage = 'ask-guests';
-      } else if (!state.budget) {
-        state.stage = 'ask-budget';
-      } else if (state.isDIY === null) {
-        state.stage = 'ask-diy';
-      } else {
-        state.stage = 'show-inspiration';
-      }
-      saveData(data);
-      const label = partyTypeLabels[intent.partyType] || 'party';
-      showTypingThen(() => {
-        addAssistantMessage(`Got it — switching to a ${label}!`);
-        setTimeout(() => advancePlanner(), 400);
-      });
-      return;
-    }
-
-    if (intent.intent === 'change-theme') {
-      state.stage = 'ask-theme';
-      state.selectedScenes = [];
-      saveData(data);
-      showTypingThen(() => {
-        addAssistantMessage("Sure! What theme or style would you prefer instead?", [
-          { text: 'Elegant & Classic', value: 'elegant and classic theme' },
-          { text: 'Rustic & Natural', value: 'rustic and natural theme' },
-          { text: 'Fun & Colorful', value: 'fun and colorful theme' },
-          { text: 'Minimalist & Modern', value: 'minimalist and modern theme' },
-        ]);
-      });
-      return;
-    }
-
-    if (intent.intent === 'correction') {
-      // User said "actually…" / "wait" without a clear new value — re-ask current question
-      showTypingThen(() => {
-        addAssistantMessage("No worries! What would you like to change? You can update the theme, guest count, budget, or anything else.");
-      });
-      return;
-    }
-
-    if (intent.intent === 'set-guests' && intent.count && intent.count > 0) {
-      state.guestCount = intent.count;
-      saveData(data);
-      if (state.stage === 'ask-guests' || state.stage === 'ask-theme') {
-        state.stage = state.budget ? (state.isDIY !== null ? 'show-inspiration' : 'ask-diy') : 'ask-budget';
-        saveData(data);
-      }
-      showTypingThen(() => {
-        addAssistantMessage(`Got it — planning for ${state.guestCount} guests!`);
-        setTimeout(() => advancePlanner(), 400);
-      });
-      return;
-    }
-
-    if (intent.intent === 'set-budget' && intent.amount && intent.amount > 0) {
-      state.budget = intent.amount;
-      saveData(data);
-      if (state.stage === 'ask-budget' || state.stage === 'ask-guests') {
-        state.stage = state.isDIY !== null ? 'show-inspiration' : 'ask-diy';
-        saveData(data);
-      }
-      showTypingThen(() => {
-        addAssistantMessage(`Budget set to ${formatCurrency(state.budget)}!`);
-        setTimeout(() => advancePlanner(), 400);
-      });
-      return;
-    }
-
-    if (intent.intent === 'set-diy') {
-      state.isDIY = intent.isDIY;
-      if (state.stage === 'ask-diy') {
-        state.stage = 'show-inspiration';
-      }
-      saveData(data);
-      advancePlanner();
-      return;
-    }
-
-    if (intent.intent === 'more-options') {
-      state.stage = 'show-inspiration';
-      state.selectedScenes = [];
-      saveData(data);
-      advancePlanner();
-      return;
-    }
-
-    // ── Default: treat as answer to the current stage's question ──
-    handleStageAnswer(text);
-  }
-
-  function handleStageAnswer(text) {
-    const state = data.plannerState;
-
-    switch (state.stage) {
-      case 'ask-theme': {
-        state.theme = text;
-        const detected = detectPartyType(text);
-        if (detected) state.partyType = detected;
-        state.stage = 'ask-guests';
-        saveData(data);
-        advancePlanner();
-        break;
-      }
-      case 'ask-guests': {
-        const num = parseInt(text.replace(/[^0-9]/g, ''), 10);
-        state.guestCount = num > 0 ? num : 30;
-        state.stage = 'ask-budget';
-        saveData(data);
-        advancePlanner();
-        break;
-      }
-      case 'ask-budget': {
-        const amount = parseFloat(text.replace(/[^0-9.]/g, ''));
-        state.budget = amount > 0 ? amount : 500;
-        state.stage = 'ask-diy';
-        saveData(data);
-        advancePlanner();
-        break;
-      }
-      case 'ask-diy': {
-        const lower = text.toLowerCase();
-        state.isDIY = lower.includes('diy') || lower.includes('myself') || lower.includes('own');
-        state.stage = 'show-inspiration';
-        saveData(data);
-        advancePlanner();
-        break;
-      }
-      case 'show-inspiration': {
-        showTypingThen(() => {
-          addAssistantMessage(
-            'Tap on the scene images above that you love, then click the "Continue" button!'
-          );
-        });
-        break;
-      }
-      case 'complete': {
-        showTypingThen(() => {
-          addAssistantMessage(
-            'Your recommendations are ready! Say "show me more options" to browse different inspiration, or check your Party Bucket.',
-            [
-              { text: 'More options', value: 'show me different options' },
-              { text: 'View Party Bucket', value: '__toggle_bucket__' },
-            ]
-          );
-        });
-        break;
-      }
-    }
-  }
-
-  // ── Chat Message Rendering ──
-
-  function addChatMessage(role, text) {
-    data.chatHistory.push({ role, text });
-    saveData(data);
-
-    const msg = document.createElement('div');
-    msg.className = `chat-message ${role}`;
-    msg.innerHTML = escapeHtml(text).replace(/\n/g, '<br>');
-    chatMessages.appendChild(msg);
-    scrollChatToBottom();
-  }
-
-  function addAssistantMessage(text, suggestions) {
-    data.chatHistory.push({ role: 'assistant', text });
-    saveData(data);
-
-    const msg = document.createElement('div');
-    msg.className = 'chat-message assistant';
-    msg.innerHTML = text.replace(/\n/g, '<br>');
-
-    if (suggestions && suggestions.length > 0) {
-      const sugDiv = document.createElement('div');
-      sugDiv.className = 'chat-suggestions';
-      suggestions.forEach(sug => {
-        const btn = document.createElement('button');
-        btn.className = 'chat-suggestion-btn';
-        btn.textContent = sug.text;
-        btn.addEventListener('click', () => {
-          if (sug.value === '__toggle_bucket__') {
-            toggleBucketPanel();
-          } else {
-            chatInput.value = sug.value;
-            handleChatSend();
-          }
-        });
-        sugDiv.appendChild(btn);
-      });
-      msg.appendChild(sugDiv);
-    }
-
-    chatMessages.appendChild(msg);
-    scrollChatToBottom();
-  }
-
-  function addAssistantMessageWithMoodBoard(text, items) {
-    const msg = document.createElement('div');
-    msg.className = 'chat-message assistant';
-    msg.style.maxWidth = '100%';
-    if (text) {
-      msg.innerHTML = text.replace(/\n/g, '<br>');
-    }
-
-    const grid = document.createElement('div');
-    grid.className = 'chat-mood-grid';
-
-    items.forEach(item => {
-      grid.appendChild(createMoodItemCard(item));
-    });
-
-    msg.appendChild(grid);
-    chatMessages.appendChild(msg);
-    scrollChatToBottom();
-  }
-
-  function createMoodItemCard(item) {
-    const card = document.createElement('div');
-    card.className = 'mood-item' + (isInBucket(item.id) ? ' in-bucket' : '');
-    card.id = 'mood-item-' + item.id;
-
-    const storeUrl = getStoreUrl(item.name, item.store);
-    const hasApiKey = !!getApiKey();
-    const catStyle = getCategoryStyle(item.category);
-
-    let visualContent;
-    if (hasApiKey) {
-      visualContent = `<div class="mood-item-visual"><div class="img-loading"><div class="spinner"></div><span>Loading...</span></div></div>`;
-    } else {
-      visualContent = `<div class="mood-item-visual" style="background: ${catStyle.gradient}"><span class="mood-item-cat-label">${escapeHtml(catStyle.label)}</span></div>`;
-    }
-
-    card.innerHTML = `
-      ${visualContent}
-      <div class="mood-item-info">
-        <span class="mood-item-name">${escapeHtml(item.name)}</span>
-        <span class="mood-item-price">${formatCurrency(item.price)}</span>
-        <span class="mood-item-store">at ${escapeHtml(item.store)}</span>
-      </div>
-      <div class="mood-item-actions">
-        <button class="btn ${isInBucket(item.id) ? 'btn-in-bucket' : 'btn-add-bucket'}" data-item-id="${item.id}">
-          ${isInBucket(item.id) ? 'In Bucket' : 'Add to Bucket'}
-        </button>
-        <a href="${escapeHtml(storeUrl)}" target="_blank" rel="noopener" class="btn-view-store">View on ${escapeHtml(item.store)}</a>
-      </div>
-    `;
-
-    card.querySelector('[data-item-id]').addEventListener('click', () => {
-      toggleBucketItem(item);
-    });
-
-    const cacheKey = 'img_' + item.id;
-    getImage(cacheKey).then(cached => {
-      if (cached) {
-        updateCardImage('mood-item-' + item.id, cached);
-      }
-    }).catch(() => {});
-
-    return card;
-  }
-
-  function showTypingThen(callback, delay) {
-    const msg = document.createElement('div');
-    msg.className = 'chat-message assistant';
-    msg.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-    chatMessages.appendChild(msg);
-    scrollChatToBottom();
-
-    setTimeout(() => {
-      msg.remove();
-      callback();
-    }, delay || 800);
-  }
-
-  function scrollChatToBottom() {
-    chatMessages.scrollTop = chatMessages.scrollHeight;
-  }
-
-  // ── Restart Planner ──
-
-  document.getElementById('planner-restart-btn').addEventListener('click', () => {
-    data.plannerState = null;
-    data.chatHistory = [];
-    saveData(data);
-    plannerChat.classList.add('hidden');
-    plannerLanding.classList.remove('hidden');
-    plannerInput.value = '';
-  });
-
-  // ── Restore Chat on Load ──
-
-  function restorePlannerState() {
-    if (data.plannerState && data.chatHistory.length > 0) {
-      plannerLanding.classList.add('hidden');
-      plannerChat.classList.remove('hidden');
-      const label = partyTypeLabels[data.plannerState.partyType] || 'Party';
-      document.getElementById('planner-party-title').textContent = label + ' Planner';
-      chatMessages.innerHTML = '';
-
-      data.chatHistory.forEach(msg => {
-        const el = document.createElement('div');
-        el.className = `chat-message ${msg.role}`;
-        el.innerHTML = escapeHtml(msg.text).replace(/\n/g, '<br>');
-        chatMessages.appendChild(el);
-      });
-
-      // If in inspiration stage, re-render the grid
-      if (data.plannerState.stage === 'show-inspiration') {
-        const scenes = inspirationScenes[data.plannerState.partyType] || inspirationScenes.birthday;
-        addInspirationGrid(scenes);
-      }
-
-      // If complete and mood board items exist, re-render
-      if (data.plannerState.stage === 'complete' && data.moodBoardItems.length > 0) {
-        const grid = document.createElement('div');
-        grid.className = 'chat-mood-grid';
-        grid.style.marginTop = '1rem';
-        data.moodBoardItems.forEach(item => {
-          grid.appendChild(createMoodItemCard(item));
-        });
-        chatMessages.appendChild(grid);
-      }
-
-      scrollChatToBottom();
-    }
-  }
-
-  // ══════════════════════════════════════
-  //  STORE URLS & HELPERS
-  // ══════════════════════════════════════
-
-  const storeNames = ['Amazon', 'Walmart', 'Target'];
-
-  function getStoreUrl(productName, store) {
-    const q = encodeURIComponent(productName);
-    switch (store) {
-      case 'Amazon': return 'https://www.amazon.com/s?k=' + q;
-      case 'Walmart': return 'https://www.walmart.com/search?q=' + q;
-      case 'Target': return 'https://www.target.com/s?searchTerm=' + q;
-      default: return 'https://www.amazon.com/s?k=' + q;
-    }
-  }
-
-  // ══════════════════════════════════════
-  //  PARTY BUCKET
-  // ══════════════════════════════════════
-
-  function isInBucket(itemId) {
-    return data.partyBucket.some(b => b.id === itemId);
-  }
-
-  function toggleBucketItem(item) {
-    if (isInBucket(item.id)) {
-      data.partyBucket = data.partyBucket.filter(b => b.id !== item.id);
-    } else {
-      data.partyBucket.push({ ...item, quantity: item.quantity || 1 });
-    }
-    saveData(data);
-    updateBucketUI();
-    refreshMoodItemCards();
-  }
-
-  function removeBucketItem(itemId) {
-    data.partyBucket = data.partyBucket.filter(b => b.id !== itemId);
-    saveData(data);
-    updateBucketUI();
-    refreshMoodItemCards();
+  function getBucketTotal() {
+    return data.partyBucket.reduce((s, item) => s + (item.price * (item.quantity || 1)), 0);
   }
 
   function updateBucketUI() {
     const count = data.partyBucket.length;
-    document.getElementById('bucket-count-header').textContent = count;
-
-    const bucketItemsEl = document.getElementById('bucket-items');
-    const total = getBucketTotal();
-    document.getElementById('bucket-total-price').textContent = formatCurrency(total);
-
-    // Update checkout button
-    const checkoutBtn = document.getElementById('bucket-checkout-btn');
-    if (checkoutBtn) {
-      checkoutBtn.textContent = count > 0 ? `Checkout — ${formatCurrency(total)}` : 'Checkout';
-      checkoutBtn.disabled = count === 0;
-    }
-
-    if (count === 0) {
-      bucketItemsEl.innerHTML = '<div class="bucket-empty">Your party bucket is empty. Add items from the shopping list!</div>';
-      return;
-    }
-
-    bucketItemsEl.innerHTML = data.partyBucket.map(item => {
-      const catStyle = getCategoryStyle(item.category);
-      const qty = item.quantity || 1;
-      const lineTotal = item.price * qty;
-      return `
-        <div class="bucket-item">
-          <div class="bucket-item-swatch" style="background: ${catStyle.gradient}"></div>
-          <div class="bucket-item-info">
-            <span class="bucket-item-name">${escapeHtml(item.name)}</span>
-            <span class="bucket-item-price">${formatCurrency(lineTotal)} <span class="bucket-item-store-tag">via ${escapeHtml(item.store)}</span></span>
-            <div class="bucket-qty-controls">
-              <button class="bucket-qty-btn" onclick="app.changeQuantity('${item.id}', -1)">-</button>
-              <span class="bucket-qty-value">${qty}</span>
-              <button class="bucket-qty-btn" onclick="app.changeQuantity('${item.id}', 1)">+</button>
-            </div>
-          </div>
-          <button class="bucket-item-remove" onclick="app.removeBucketItem('${item.id}')">&times;</button>
-        </div>
-      `;
-    }).join('');
+    bucketCountBadge.textContent = count;
+    bucketTotalPrice.textContent = formatCurrency(getBucketTotal());
+    bucketCheckoutBtn.disabled = count === 0;
+    bucketCheckoutBtn.textContent = count > 0 ? `Checkout (${formatCurrency(getBucketTotal())})` : 'Checkout';
   }
 
-  function changeQuantity(itemId, delta) {
-    const item = data.partyBucket.find(b => b.id === itemId);
-    if (!item) return;
-    const newQty = (item.quantity || 1) + delta;
-    if (newQty < 1) {
-      removeBucketItem(itemId);
-      return;
+  // ══════════════════════════════════════
+  //  ZOOM MODAL
+  // ══════════════════════════════════════
+
+  function showZoomModal(imageUrl, bbox, label) {
+    zoomModalLabel.textContent = label || '';
+    zoomModalImageWrap.innerHTML = '';
+
+    if (bbox && bbox.length >= 4) {
+      const div = document.createElement('div');
+      div.style.cssText = `width:300px;height:300px;${buildBboxThumbnailStyle(imageUrl, bbox)}`;
+      zoomModalImageWrap.appendChild(div);
+    } else {
+      const img = document.createElement('img');
+      img.src = imageUrl;
+      img.alt = label || '';
+      zoomModalImageWrap.appendChild(img);
     }
-    item.quantity = newQty;
-    saveData(data);
-    updateBucketUI();
+
+    zoomModal.classList.remove('hidden');
   }
 
-  // ── Unified Checkout ──
+  zoomModalClose.addEventListener('click', () => zoomModal.classList.add('hidden'));
+  zoomModal.querySelector('.zoom-modal-backdrop').addEventListener('click', () => zoomModal.classList.add('hidden'));
 
-  // ── UCP-Powered Checkout ──
+  // ══════════════════════════════════════
+  //  CONTEXT MENU
+  // ══════════════════════════════════════
+
+  let contextMenuTarget = null;
+
+  function showContextMenu(x, y, anchor) {
+    contextMenuTarget = anchor;
+    contextMenu.style.left = Math.min(x, window.innerWidth - 200) + 'px';
+    contextMenu.style.top = Math.min(y, window.innerHeight - 200) + 'px';
+    contextMenu.classList.remove('hidden');
+  }
+
+  document.addEventListener('click', (e) => {
+    if (!contextMenu.contains(e.target)) {
+      contextMenu.classList.add('hidden');
+    }
+  });
+
+  $$('.context-menu-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const action = item.dataset.action;
+      contextMenu.classList.add('hidden');
+      if (!contextMenuTarget) return;
+
+      if (action === 'zoom' && data.spacePhoto) {
+        showZoomModal(data.spacePhoto, null, contextMenuTarget.label);
+      } else if (action === 'find-products') {
+        openChatDrawer();
+        chatInput.value = `Find products for ${contextMenuTarget.label}`;
+        handleChatSend();
+      } else if (action === 'remove') {
+        const dot = $(`[data-anchor-id="${contextMenuTarget.id}"]`);
+        if (dot) dot.remove();
+        state.anchors = state.anchors.filter(a => a.id !== contextMenuTarget.id);
+      }
+    });
+  });
+
+  // ══════════════════════════════════════
+  //  CHECKOUT (UCP)
+  // ══════════════════════════════════════
 
   let stripeInstance = null;
   let stripeCardElement = null;
@@ -2855,65 +1207,40 @@
 
   function getStripe() {
     if (!stripeInstance && window.Stripe) {
-      const stripeKey = localStorage.getItem('partyplanner_stripe_pk') || 'pk_test_placeholder';
-      stripeInstance = window.Stripe(stripeKey);
+      stripeInstance = window.Stripe(localStorage.getItem('partyplanner_stripe_pk') || 'pk_test_placeholder');
     }
     return stripeInstance;
   }
 
-  function initCheckout() {
-    const checkoutBtn = document.getElementById('bucket-checkout-btn');
-    const checkoutPanel = document.getElementById('checkout-panel');
-    const backBtn = document.getElementById('checkout-back-btn');
-    const placeOrderBtn = document.getElementById('checkout-place-order-btn');
-
-    if (!checkoutBtn) return;
-
-    checkoutBtn.addEventListener('click', async () => {
-      if (data.partyBucket.length === 0) return;
-      document.getElementById('bucket-items').classList.add('hidden');
-      document.getElementById('bucket-footer').classList.add('hidden');
-      checkoutPanel.classList.remove('hidden');
-      await renderCheckoutSummary();
-      initStripeElements();
-    });
-
-    backBtn.addEventListener('click', () => {
-      checkoutPanel.classList.add('hidden');
-      document.getElementById('bucket-items').classList.remove('hidden');
-      document.getElementById('bucket-footer').classList.remove('hidden');
-    });
-
-    placeOrderBtn.addEventListener('click', () => handlePlaceOrder());
-  }
+  bucketCheckoutBtn.addEventListener('click', async () => {
+    if (data.partyBucket.length === 0) return;
+    sheetCheckout.classList.remove('hidden');
+    sheetItemsList.style.display = 'none';
+    sheetProducts.style.display = 'none';
+    setSheetState('full');
+    await renderCheckoutSummary();
+    initStripeElements();
+  });
 
   function initStripeElements() {
     const stripe = getStripe();
     if (!stripe || stripeCardElement) return;
-
     const elements = stripe.elements();
     stripeCardElement = elements.create('card', {
-      style: {
-        base: {
-          fontSize: '16px',
-          color: '#2d3436',
-          '::placeholder': { color: '#aab7c4' },
-        },
-      },
+      style: { base: { fontSize: '16px', color: '#2d3436', '::placeholder': { color: '#aab7c4' } } },
     });
     stripeCardElement.mount('#stripe-card-element');
     stripeCardElement.on('change', (event) => {
-      const errEl = document.getElementById('stripe-card-errors');
-      errEl.textContent = event.error ? event.error.message : '';
+      const el = $('#stripe-card-errors');
+      if (el) el.textContent = event.error ? event.error.message : '';
     });
   }
 
   async function renderCheckoutSummary() {
-    const summaryEl = document.getElementById('checkout-summary');
-    const retailersEl = document.getElementById('checkout-retailers');
-    if (!summaryEl) return;
+    const summaryEl = $('#checkout-summary');
+    const retailersEl = $('#checkout-retailers');
 
-    summaryEl.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    summaryEl.innerHTML = '<div style="text-align:center;padding:10px;"><div class="spinner" style="margin:0 auto;"></div></div>';
 
     try {
       const res = await fetch('/api/checkout/plan', {
@@ -2922,113 +1249,91 @@
         body: JSON.stringify({ items: data.partyBucket }),
       });
       checkoutPlan = await res.json();
-    } catch (err) {
+    } catch {
       checkoutPlan = { retailers: [], unsupported: [] };
     }
 
     const total = getBucketTotal();
 
-    let retailerHtml = '';
+    let html = '';
     for (const r of (checkoutPlan.retailers || [])) {
-      const icon = r.method === 'ucp' ? '&#x1F6D2;' : '&#x1F517;';
-      const badge = r.method === 'ucp' ? '<span class="checkout-badge ucp">UCP Checkout</span>' : '<span class="checkout-badge amazon">Cart Link</span>';
-      retailerHtml += `
-        <div class="checkout-retailer-group">
-          <div class="checkout-retailer-header">
-            <span>${icon} <strong>${escapeHtml(r.name)}</strong></span>
-            ${badge}
-          </div>
-          <div class="checkout-retailer-items">
-            ${r.items.map(it => {
-              const qty = it.quantity || 1;
-              return `<div class="checkout-line-item"><span>${escapeHtml(it.name)}${qty > 1 ? ' x' + qty : ''}</span><span>${formatCurrency(it.price * qty)}</span></div>`;
-            }).join('')}
-          </div>
-          <div class="checkout-retailer-subtotal">Subtotal: ${formatCurrency(r.total)}</div>
+      const badge = r.method === 'ucp'
+        ? '<span class="checkout-badge ucp">UCP</span>'
+        : '<span class="checkout-badge amazon">Cart Link</span>';
+      html += `<div class="checkout-retailer-group">
+        <div class="checkout-retailer-header"><strong>${escapeHtml(r.name)}</strong>${badge}</div>
+        <div class="checkout-retailer-items">
+          ${r.items.map(it => `<div class="checkout-line-item"><span>${escapeHtml(it.name)}</span><span>${formatCurrency(it.price * (it.quantity || 1))}</span></div>`).join('')}
         </div>
-      `;
+        <div class="checkout-retailer-subtotal">Subtotal: ${formatCurrency(r.total)}</div>
+      </div>`;
     }
 
     if ((checkoutPlan.unsupported || []).length > 0) {
-      retailerHtml += `
-        <div class="checkout-retailer-group checkout-unsupported">
-          <div class="checkout-retailer-header"><span>&#x1F517; <strong>Other</strong></span><span class="checkout-badge other">Direct Links</span></div>
-          <div class="checkout-retailer-items">
-            ${checkoutPlan.unsupported.map(it => {
-              const qty = it.quantity || 1;
-              return `<div class="checkout-line-item"><span>${escapeHtml(it.name)}</span><span>${formatCurrency(it.price * qty)}</span></div>`;
-            }).join('')}
-          </div>
+      html += `<div class="checkout-retailer-group">
+        <div class="checkout-retailer-header"><strong>Other</strong><span class="checkout-badge other">Direct</span></div>
+        <div class="checkout-retailer-items">
+          ${checkoutPlan.unsupported.map(it => `<div class="checkout-line-item"><span>${escapeHtml(it.name)}</span><span>${formatCurrency(it.price)}</span></div>`).join('')}
         </div>
-      `;
+      </div>`;
     }
 
-    retailersEl.innerHTML = retailerHtml;
-
-    summaryEl.innerHTML = `
-      <div class="checkout-summary-total">
-        <strong>Total (${data.partyBucket.length} items)</strong>
-        <strong>${formatCurrency(total)}</strong>
-      </div>
-    `;
+    retailersEl.innerHTML = html;
+    summaryEl.innerHTML = `<div class="checkout-summary-total"><strong>Total (${data.partyBucket.length} items)</strong><strong>${formatCurrency(total)}</strong></div>`;
   }
 
+  $('#checkout-place-order-btn').addEventListener('click', handlePlaceOrder);
+
   async function handlePlaceOrder() {
-    const placeOrderBtn = document.getElementById('checkout-place-order-btn');
-    placeOrderBtn.disabled = true;
-    placeOrderBtn.textContent = 'Processing...';
+    const btn = $('#checkout-place-order-btn');
+    btn.disabled = true;
+    btn.textContent = 'Processing...';
 
     const buyerInfo = {
-      firstName: (document.getElementById('checkout-name').value.trim().split(' ')[0]) || '',
-      lastName: (document.getElementById('checkout-name').value.trim().split(' ').slice(1).join(' ')) || '',
-      email: document.getElementById('checkout-email').value.trim(),
+      firstName: ($('#checkout-name').value.trim().split(' ')[0]) || '',
+      lastName: ($('#checkout-name').value.trim().split(' ').slice(1).join(' ')) || '',
+      email: $('#checkout-email').value.trim(),
       address: {
-        street: document.getElementById('checkout-street').value.trim(),
-        city: document.getElementById('checkout-city').value.trim(),
-        state: document.getElementById('checkout-state').value.trim(),
-        zip: document.getElementById('checkout-zip').value.trim(),
+        street: $('#checkout-street').value.trim(),
+        city: $('#checkout-city').value.trim(),
+        state: $('#checkout-state').value.trim(),
+        zip: $('#checkout-zip').value.trim(),
         country: 'US',
       },
     };
 
     if (!buyerInfo.email || !buyerInfo.address.street) {
-      placeOrderBtn.disabled = false;
-      placeOrderBtn.textContent = 'Place Order';
-      alert('Please fill in your name, email, and shipping address.');
+      btn.disabled = false;
+      btn.textContent = 'Place Order';
+      alert('Please fill in your email and shipping address.');
       return;
     }
 
-    // Tokenize card via Stripe
     let stripeToken = null;
     const stripe = getStripe();
     if (stripe && stripeCardElement) {
       try {
         const { token, error } = await stripe.createToken(stripeCardElement);
         if (error) {
-          document.getElementById('stripe-card-errors').textContent = error.message;
-          placeOrderBtn.disabled = false;
-          placeOrderBtn.textContent = 'Place Order';
+          $('#stripe-card-errors').textContent = error.message;
+          btn.disabled = false;
+          btn.textContent = 'Place Order';
           return;
         }
         stripeToken = token.id;
       } catch (err) {
-        console.error('Stripe tokenization failed:', err);
+        console.error('Stripe error:', err);
       }
     }
 
     const results = [];
-
     for (const retailer of (checkoutPlan.retailers || [])) {
       if (retailer.method === 'ucp') {
         try {
           const createRes = await fetch('/api/checkout/create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              retailerKey: retailer.key,
-              items: retailer.items,
-              buyerInfo,
-            }),
+            body: JSON.stringify({ retailerKey: retailer.key, items: retailer.items, buyerInfo }),
           });
           const session = await createRes.json();
 
@@ -3041,16 +1346,12 @@
             const completeRes = await fetch('/api/checkout/complete', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                retailerKey: retailer.key,
-                sessionId: session.sessionId,
-                paymentToken: { token: stripeToken, handlerId: 'com.stripe' },
-              }),
+              body: JSON.stringify({ retailerKey: retailer.key, sessionId: session.sessionId, paymentToken: { token: stripeToken, handlerId: 'com.stripe' } }),
             });
             const order = await completeRes.json();
             results.push({ retailer: retailer.name, status: order.error ? 'fallback' : 'completed', orderId: order.orderId, orderUrl: order.orderUrl, message: order.error });
           } else {
-            results.push({ retailer: retailer.name, status: 'fallback', message: 'No payment token available' });
+            results.push({ retailer: retailer.name, status: 'fallback', message: 'No payment token' });
           }
         } catch (err) {
           results.push({ retailer: retailer.name, status: 'fallback', items: retailer.items, message: err.message });
@@ -3060,100 +1361,129 @@
       }
     }
 
-    showCheckoutResults(results, buyerInfo);
+    showCheckoutResults(results);
   }
 
-  function showCheckoutResults(results, buyerInfo) {
-    const checkoutPanel = document.getElementById('checkout-panel');
-
-    let html = '<div class="checkout-success">';
-    html += '<div class="checkout-success-icon">&#x2714;</div>';
-    html += '<h4>Checkout Summary</h4>';
-
+  function showCheckoutResults(results) {
+    let html = '<div class="checkout-success"><div class="checkout-success-icon">&#x2714;</div><h4>Checkout Summary</h4>';
     for (const r of results) {
       if (r.status === 'completed') {
-        html += `<div class="checkout-result-item checkout-result-success">
-          <strong>${escapeHtml(r.retailer)}</strong> — Order placed!
-          ${r.orderUrl ? `<a href="${escapeHtml(r.orderUrl)}" target="_blank" class="product-result-link">View order &rarr;</a>` : ''}
-        </div>`;
+        html += `<div class="checkout-result-item checkout-result-success"><strong>${escapeHtml(r.retailer)}</strong> — Order placed!</div>`;
       } else if (r.status === 'cart_url') {
-        html += `<div class="checkout-result-item checkout-result-cart">
-          <strong>${escapeHtml(r.retailer)}</strong>
-          <a href="${escapeHtml(r.cartUrl)}" target="_blank" class="btn btn-primary btn-sm">Open ${escapeHtml(r.retailer)} Cart &rarr;</a>
-        </div>`;
+        html += `<div class="checkout-result-item checkout-result-cart"><strong>${escapeHtml(r.retailer)}</strong><a href="${escapeHtml(r.cartUrl)}" target="_blank" class="btn btn-primary btn-sm">Open Cart</a></div>`;
       } else {
-        const itemLinks = (r.items || [])
-          .filter(it => it.url)
-          .map(it => `<a href="${escapeHtml(it.url)}" target="_blank" class="product-result-link">${escapeHtml(it.name)} &rarr;</a>`)
-          .join('');
-        html += `<div class="checkout-result-item checkout-result-fallback">
-          <strong>${escapeHtml(r.retailer)}</strong> — ${escapeHtml(r.message || 'Use direct links')}
-          <div class="checkout-fallback-links">${itemLinks}</div>
-        </div>`;
+        const links = (r.items || []).filter(it => it.url).map(it => `<a href="${escapeHtml(it.url)}" target="_blank" class="product-result-link">${escapeHtml(it.name)}</a>`).join('');
+        html += `<div class="checkout-result-item checkout-result-fallback"><strong>${escapeHtml(r.retailer)}</strong> — ${escapeHtml(r.message || 'Use links')}<div class="checkout-fallback-links">${links}</div></div>`;
       }
     }
+    html += `<p style="margin-top:8px;font-size:0.85rem;color:var(--text-light)">${data.partyBucket.length} items — ${formatCurrency(getBucketTotal())}</p>`;
+    html += '<button class="btn btn-primary" id="checkout-done-btn" style="margin-top:16px">Done</button></div>';
 
-    html += `<p class="checkout-success-detail">${data.partyBucket.length} items — ${formatCurrency(getBucketTotal())}</p>`;
-    html += '<button class="btn btn-primary" id="checkout-done-btn">Done</button>';
-    html += '</div>';
-
-    checkoutPanel.innerHTML = html;
-
-    document.getElementById('checkout-done-btn').addEventListener('click', () => {
+    sheetCheckout.innerHTML = html;
+    $('#checkout-done-btn').addEventListener('click', () => {
       data.partyBucket = [];
       saveData(data);
       updateBucketUI();
-      checkoutPanel.classList.add('hidden');
-      // Rebuild the panel HTML since we replaced it
-      location.reload();
+      sheetCheckout.classList.add('hidden');
+      sheetCheckout.innerHTML = '';
+      sheetItemsList.style.display = '';
+      sheetProducts.style.display = '';
+      setSheetState('collapsed');
     });
   }
 
-  function refreshMoodItemCards() {
-    document.querySelectorAll('.mood-item').forEach(card => {
-      const idAttr = card.id;
-      if (!idAttr) return;
-      const itemId = idAttr.replace('mood-item-', '');
-      const btn = card.querySelector('[data-item-id]');
-      if (!btn) return;
-      if (isInBucket(itemId)) {
-        card.classList.add('in-bucket');
-        btn.className = 'btn btn-in-bucket';
-        btn.textContent = 'In Bucket';
-      } else {
-        card.classList.remove('in-bucket');
-        btn.className = 'btn btn-add-bucket';
-        btn.textContent = 'Add to Bucket';
-      }
+  // ══════════════════════════════════════
+  //  SETTINGS
+  // ══════════════════════════════════════
+
+  settingsBtn.addEventListener('click', () => openModal('settings-modal'));
+
+  settingsForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const key = $('#openai-key').value.trim();
+    if (key) localStorage.setItem('partyplanner_openai_key', key);
+    else localStorage.removeItem('partyplanner_openai_key');
+    closeModal('settings-modal');
+  });
+
+  function openModal(id) {
+    document.getElementById(id).classList.remove('hidden');
+  }
+
+  function closeModal(id) {
+    document.getElementById(id).classList.add('hidden');
+  }
+
+  $$('.modal-close, [data-modal]').forEach(el => {
+    el.addEventListener('click', () => {
+      const modalId = el.dataset.modal;
+      if (modalId) closeModal(modalId);
     });
-  }
+  });
 
-  function toggleBucketPanel() {
-    const panel = document.getElementById('party-bucket-panel');
-    panel.classList.toggle('hidden');
-    updateBucketUI();
-  }
-
-  document.getElementById('toggle-bucket-btn').addEventListener('click', toggleBucketPanel);
-  document.getElementById('close-bucket-btn').addEventListener('click', () => {
-    document.getElementById('party-bucket-panel').classList.add('hidden');
+  $$('.modal-backdrop').forEach(backdrop => {
+    backdrop.addEventListener('click', () => {
+      const modal = backdrop.closest('.modal');
+      if (modal) closeModal(modal.id);
+    });
   });
 
   // ══════════════════════════════════════
-  //  RENDER ALL & INIT
+  //  INIT
   // ══════════════════════════════════════
 
-  function renderAll() {
+  function init() {
     updateBucketUI();
-    initCheckout();
-    restorePlannerState();
+
+    // Restore space photo if saved
+    if (data.spacePhoto) {
+      workspacePhoto.src = data.spacePhoto;
+      workspacePhotoWrap.classList.remove('hidden');
+      landingOverlay.classList.add('hidden');
+
+      if (data.anchors && data.anchors.length > 0) {
+        state.anchors = data.anchors;
+        renderAnchorDots(data.anchors);
+        sheetThemeName.textContent = data.themeName || `${data.anchors.length} anchor points`;
+      }
+    }
+
+    // Restore extracted items
+    if (data.extractedItems && data.extractedItems.length > 0) {
+      state.extractedItems = data.extractedItems;
+      state.inspirationUrls = data.inspirationUrls || [];
+      sheetItemCount.textContent = `${data.extractedItems.length} items`;
+      renderExtractedItemsInSheet(data.extractedItems);
+    }
+
+    // Restore chat
+    if (data.chatHistory && data.chatHistory.length > 0) {
+      chatMessages.innerHTML = '';
+      data.chatHistory.forEach(msg => {
+        const el = document.createElement('div');
+        el.className = `chat-message ${msg.role}`;
+        el.innerHTML = escapeHtml(msg.text).replace(/\n/g, '<br>');
+        chatMessages.appendChild(el);
+      });
+    }
   }
 
   window.app = {
-    removeBucketItem,
-    changeQuantity,
+    removeBucketItem(id) {
+      data.partyBucket = data.partyBucket.filter(b => b.id !== id);
+      saveData(data);
+      updateBucketUI();
+    },
+    changeQuantity(id, delta) {
+      const item = data.partyBucket.find(b => b.id === id);
+      if (!item) return;
+      const newQty = (item.quantity || 1) + delta;
+      if (newQty < 1) { this.removeBucketItem(id); return; }
+      item.quantity = newQty;
+      saveData(data);
+      updateBucketUI();
+    },
   };
 
-  openDB().catch(() => console.warn('IndexedDB unavailable'));
-  renderAll();
+  init();
 })();
