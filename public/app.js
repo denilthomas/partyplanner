@@ -169,26 +169,66 @@
   // ══════════════════════════════════════
 
   const PLANNER_SYSTEM = [
-    'You are a friendly, knowledgeable AI Party Planning Agent. You help users plan parties using a spatial, visual approach.',
+    'You are a friendly, knowledgeable AI Party Planning Agent.',
     '',
-    'The app has already handled vision tasks (space analysis, item extraction) via Gemini Flash.',
-    'Your job is to be the conversational brain: answer questions, give suggestions, help refine selections.',
+    'PIPELINE — follow these stages IN ORDER:',
     '',
-    'You can help with:',
-    '- Theme ideas and color palette suggestions',
-    '- Budget advice and prioritization',
-    '- Quantity recommendations based on guest count',
-    '- Alternative product suggestions',
-    '- General party planning tips',
+    'STAGE 1 — Gather basics (1-2 messages max, be brief):',
+    '- Party type and theme/style',
+    '- Approximate guest count',
+    '- Budget range',
+    'Once you have party type + theme, move to Stage 2. Do NOT linger here.',
     '',
-    'Keep responses concise (1-3 sentences). Be warm and enthusiastic.',
-    'You do NOT need to search for products or extract items — the app handles that automatically.',
+    'STAGE 2 — Ask about their space:',
+    '- Call request_space_photo to show the upload UI.',
+    '- Say something like "Want to upload a photo of your space so I can tailor the decor? You can also skip this step."',
+    '- Wait for the user to upload or skip. Do NOT proceed until they respond.',
+    '',
+    'STAGE 3 — Search for inspiration:',
+    '- Call search_inspiration with a descriptive query matching their theme.',
+    '- Example: "bohemian garden party decor", "firetruck birthday party decorations"',
+    '- The app displays images as a selectable grid. Wait for the user to pick favorites.',
+    '- If user wants different options, call search_inspiration again with a refined query.',
+    '',
+    'STAGE 4 — Extraction happens automatically:',
+    '- After the user confirms inspiration images, the app automatically extracts buyable items using Gemini Vision.',
+    '- Items appear in the bottom sheet grouped by bucket (Tabletop, Wall & Backdrop, etc.).',
+    '- Respond with encouragement like "Great picks! I found X items from your inspiration. Review them in the panel below and tap Find Products when ready!"',
+    '- Do NOT try to list or search for items yourself.',
+    '',
+    'ONGOING:',
+    '- Keep responses concise: 1-3 sentences. Be warm and enthusiastic.',
+    '- If user asks to add/remove items, call update_party_bucket.',
+    '- Help with budget advice, quantity recommendations, and alternatives.',
+    '- NEVER ask "shall I add items to your bucket" before items have been shown.',
   ].join('\n');
 
   const PLANNER_TOOLS = [
     {
+      name: 'search_inspiration',
+      description: 'Search for party decor inspiration images. Call this after gathering the party type and theme. Also call when the user wants different/refined inspiration.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Descriptive search query for party inspiration (e.g. "bohemian garden party decor", "rose gold elegant wedding table")' },
+        },
+        required: ['query'],
+      },
+    },
+    {
+      name: 'request_space_photo',
+      description: 'Show the space photo upload UI in chat. Call this after gathering party basics (type, theme) to ask the user to upload a photo of their venue/space.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          message: { type: 'string', description: 'Message to show with the upload prompt' },
+        },
+        required: ['message'],
+      },
+    },
+    {
       name: 'update_party_bucket',
-      description: 'Add, remove, or update items in the user\'s party bucket.',
+      description: 'Add or remove items from the party bucket.',
       input_schema: {
         type: 'object',
         properties: {
@@ -499,18 +539,6 @@
   //  INSPIRATION SEARCH (Serper.dev)
   // ══════════════════════════════════════
 
-  async function fetchAndShowInspiration(query) {
-    addChatMessage('assistant', 'Searching for inspiration...');
-    const images = await callSearchInspiration(query, 12);
-
-    if (images.length === 0) {
-      addChatMessage('assistant', 'No inspiration images found. Try describing your theme differently.');
-      return;
-    }
-
-    renderInspirationGrid(images);
-  }
-
   function renderInspirationGrid(images) {
     const msg = document.createElement('div');
     msg.className = 'chat-message assistant';
@@ -652,6 +680,14 @@
           }
         }
       });
+
+      // Tell Claude what happened
+      const bucketSummary = BUCKET_ORDER
+        .map(b => { const c = items.filter(i => i.bucket === b).length; return c > 0 ? `${BUCKET_META[b].label}: ${c}` : null; })
+        .filter(Boolean).join(', ');
+      addChatMessage('assistant', `Found ${items.length} items from your inspiration! (${bucketSummary}) Review them in the panel below and tap "Find Products" when ready.`);
+      state.apiMessages.push({ role: 'user', content: `Extraction complete: ${items.length} items found across buckets: ${bucketSummary}. Items are displayed for the user to review.` });
+      state.apiMessages.push({ role: 'assistant', content: [{ type: 'text', text: `Found ${items.length} items from your inspiration! Review them below and tap "Find Products" when you're ready.` }] });
     } else {
       addChatMessage('assistant', 'No buyable items found in those images. Try different inspiration!');
       openChatDrawer();
@@ -949,18 +985,7 @@
     chatInput.value = '';
     chatInput.style.height = 'auto';
 
-    if (text) addChatMessage('user', text);
-
-    // Check for theme/inspiration triggers
-    const themeMatch = text.match(/(?:theme|style|looking for|planning a|want a)\s+(.+)/i);
-    if (themeMatch && state.anchors.length > 0) {
-      state.themeName = themeMatch[1].trim();
-      data.themeName = state.themeName;
-      await fetchAndShowInspiration(state.themeName);
-      return;
-    }
-
-    // If user has images pending, treat as inspiration upload
+    // If user has images pending, handle as direct inspiration upload
     if (pendingChatImages.length > 0) {
       const images = pendingChatImages.map(img => ({
         base64: img.base64,
@@ -969,7 +994,10 @@
       pendingChatImages = [];
       renderChatImagePreview();
 
+      if (text) addChatMessage('user', text);
+      addChatMessage('user', `Uploaded ${images.length} image${images.length > 1 ? 's' : ''} for analysis.`);
       addChatMessage('assistant', 'Analyzing your images...');
+
       const items = await callExtractItems(images, state.anchors);
       state.extractedItems = items;
       data.extractedItems = items;
@@ -984,9 +1012,12 @@
       return;
     }
 
-    // Regular chat — send to Claude
-    const contentBlocks = [{ type: 'text', text }];
-    state.apiMessages.push({ role: 'user', content: contentBlocks });
+    if (text) addChatMessage('user', text);
+    state.apiMessages.push({ role: 'user', content: text });
+    await sendToLLM();
+  }
+
+  async function sendToLLM() {
 
     const typingEl = document.createElement('div');
     typingEl.className = 'chat-message assistant';
@@ -1015,35 +1046,84 @@
     if (toolUses.length > 0) {
       const toolResults = [];
       for (const tool of toolUses) {
-        const result = processToolCall(tool);
+        const result = await processToolCall(tool);
         toolResults.push(result);
       }
       state.apiMessages.push({ role: 'user', content: toolResults });
+      saveData(data);
 
-      const followUp = await callClaude(state.apiMessages);
-      if (followUp && !followUp.error && followUp.content) {
-        state.apiMessages.push({ role: 'assistant', content: followUp.content });
-        const followTexts = followUp.content.filter(b => b.type === 'text').map(b => b.text);
-        if (followTexts.length > 0) addChatMessage('assistant', followTexts.join('\n'));
-      }
-    }
-
-    // Check if response mentions a theme — offer inspiration search
-    if (state.anchors.length > 0 && state.extractedItems.length === 0) {
-      const responseText = texts.join(' ').toLowerCase();
-      if (responseText.includes('theme') || responseText.includes('style') || responseText.includes('look')) {
-        // Detect theme from conversation
-        const themeKeywords = text.match(/(?:birthday|wedding|baby\s*shower|graduation|retirement|holiday|christmas|halloween|dinner|anniversary|garden|rustic|boho|elegant|tropical|princess|superhero|unicorn|firetruck|frozen|safari)/i);
-        if (themeKeywords) {
-          state.themeName = themeKeywords[0];
-          data.themeName = state.themeName;
-          await fetchAndShowInspiration(state.themeName + ' party decor');
-        }
-      }
+      // Let Claude respond to tool results
+      await sendToLLMContinue();
     }
   }
 
-  function processToolCall(tool) {
+  async function sendToLLMContinue() {
+    const typingEl = document.createElement('div');
+    typingEl.className = 'chat-message assistant';
+    typingEl.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    chatMessages.appendChild(typingEl);
+    scrollChatToBottom();
+
+    const result = await callClaude(state.apiMessages);
+    typingEl.remove();
+
+    if (!result || result.error || !result.content) return;
+
+    state.apiMessages.push({ role: 'assistant', content: result.content });
+
+    const texts = result.content.filter(b => b.type === 'text').map(b => b.text);
+    if (texts.length > 0) {
+      addChatMessage('assistant', texts.join('\n'));
+    }
+
+    const toolUses = result.content.filter(b => b.type === 'tool_use');
+    if (toolUses.length > 0) {
+      const toolResults = [];
+      for (const tool of toolUses) {
+        const r = await processToolCall(tool);
+        toolResults.push(r);
+      }
+      state.apiMessages.push({ role: 'user', content: toolResults });
+      saveData(data);
+      await sendToLLMContinue();
+    }
+  }
+
+  async function processToolCall(tool) {
+    if (tool.name === 'search_inspiration') {
+      const inp = tool.input || {};
+      const query = inp.query || '';
+      state.themeName = query;
+      data.themeName = query;
+      sheetThemeName.textContent = query;
+      saveData(data);
+
+      const images = await callSearchInspiration(query, 12);
+      if (images.length > 0) {
+        renderInspirationGrid(images);
+        return {
+          type: 'tool_result',
+          tool_use_id: tool.id,
+          content: `Displayed ${images.length} inspiration images for "${query}". The user is selecting their favorites. Wait for them to confirm.`,
+        };
+      }
+      return {
+        type: 'tool_result',
+        tool_use_id: tool.id,
+        content: `No inspiration images found for "${query}". Ask the user to describe their theme differently and try again.`,
+      };
+    }
+
+    if (tool.name === 'request_space_photo') {
+      const inp = tool.input || {};
+      showSpaceUploadInChat(inp.message || 'Upload a photo of your space so I can tailor the decor to fit.');
+      return {
+        type: 'tool_result',
+        tool_use_id: tool.id,
+        content: 'Space photo upload UI shown. Waiting for the user to upload a photo or skip.',
+      };
+    }
+
     if (tool.name === 'update_party_bucket') {
       const inp = tool.input || {};
       const results = [];
@@ -1075,7 +1155,119 @@
         content: results.join('. ') + `. Bucket: ${data.partyBucket.length} items, ${formatCurrency(getBucketTotal())}.`,
       };
     }
+
     return { type: 'tool_result', tool_use_id: tool.id, content: 'Unknown tool.' };
+  }
+
+  function showSpaceUploadInChat(message) {
+    const msg = document.createElement('div');
+    msg.className = 'chat-message assistant';
+    msg.style.maxWidth = '100%';
+
+    const heading = document.createElement('div');
+    heading.className = 'space-upload-heading';
+    heading.innerHTML = '<strong>' + escapeHtml(message) + '</strong>';
+    msg.appendChild(heading);
+
+    const uploadArea = document.createElement('div');
+    uploadArea.className = 'space-upload-area';
+    uploadArea.innerHTML = '<div class="space-upload-icon">+</div><div class="space-upload-text">Tap to upload a photo of your space</div>';
+
+    const fileInput = document.createElement('input');
+    fileInput.type = 'file';
+    fileInput.accept = 'image/*';
+    fileInput.style.display = 'none';
+
+    const previewContainer = document.createElement('div');
+    previewContainer.className = 'space-upload-preview hidden';
+
+    let spaceImageData = null;
+
+    uploadArea.addEventListener('click', () => fileInput.click());
+
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files[0];
+      if (!file) return;
+      const dataUrl = await compressImage(file, 1024, 0.85);
+      const parsed = dataUrlToBase64(dataUrl);
+      if (!parsed) return;
+
+      spaceImageData = parsed;
+      state.spaceBase64 = parsed.base64;
+      state.spaceMediaType = parsed.mediaType;
+
+      previewContainer.innerHTML = '';
+      const previewImg = document.createElement('img');
+      previewImg.src = dataUrl;
+      previewContainer.appendChild(previewImg);
+      previewContainer.classList.remove('hidden');
+      uploadArea.classList.add('hidden');
+      analyzeBtn.textContent = 'Analyze my space';
+
+      workspacePhoto.src = dataUrl;
+      workspacePhotoWrap.classList.remove('hidden');
+      landingOverlay.classList.add('hidden');
+      data.spacePhoto = dataUrl;
+      saveData(data);
+    });
+
+    msg.appendChild(uploadArea);
+    msg.appendChild(fileInput);
+    msg.appendChild(previewContainer);
+
+    const actions = document.createElement('div');
+    actions.className = 'space-upload-actions';
+
+    const skipBtn = document.createElement('button');
+    skipBtn.className = 'btn btn-secondary';
+    skipBtn.textContent = 'Skip';
+    skipBtn.addEventListener('click', () => {
+      skipBtn.disabled = true;
+      analyzeBtn.disabled = true;
+      uploadArea.style.pointerEvents = 'none';
+      addChatMessage('user', 'Skipping space photo.');
+      state.apiMessages.push({ role: 'user', content: 'I\'m skipping the space photo. Let\'s continue to finding inspiration.' });
+      sendToLLM();
+    });
+
+    const analyzeBtn = document.createElement('button');
+    analyzeBtn.className = 'btn btn-primary';
+    analyzeBtn.textContent = 'Upload a photo';
+    analyzeBtn.addEventListener('click', async () => {
+      if (!spaceImageData) {
+        fileInput.click();
+        return;
+      }
+      skipBtn.disabled = true;
+      analyzeBtn.disabled = true;
+      analyzeBtn.textContent = 'Analyzing...';
+      uploadArea.style.pointerEvents = 'none';
+
+      const anchors = await callAnalyzeSpace(spaceImageData.base64, spaceImageData.mediaType);
+      state.anchors = anchors;
+      data.anchors = anchors;
+      saveData(data);
+      renderAnchorDots(anchors);
+
+      if (anchors.length > 0) {
+        sheetThemeName.textContent = `${anchors.length} anchor points`;
+        const spaceMsg = `I uploaded my space photo. ${anchors.length} decoration zones found: ${anchors.map(a => a.label).join(', ')}. Now let's find inspiration!`;
+        addChatMessage('user', spaceMsg);
+        state.apiMessages.push({ role: 'user', content: spaceMsg });
+      } else {
+        addChatMessage('user', 'I uploaded my space photo. Let\'s find inspiration!');
+        state.apiMessages.push({ role: 'user', content: 'I uploaded my space photo. Let\'s find inspiration!' });
+      }
+      analyzeBtn.textContent = 'Done!';
+      sendToLLM();
+    });
+
+    actions.appendChild(skipBtn);
+    actions.appendChild(analyzeBtn);
+    msg.appendChild(actions);
+
+    chatMessages.appendChild(msg);
+    scrollChatToBottom();
   }
 
   // Chat image uploads
