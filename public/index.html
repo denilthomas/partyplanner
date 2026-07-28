@@ -55,56 +55,48 @@
       <div class="landing-camera-icon" aria-hidden="true">
         <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
       </div>
-      <h2 class="landing-heading">What kind of party are you planning?</h2>
-      <p class="landing-subtext">Pick a party type below or tap the chat button to tell us all about your dream event.</p>
+      <h2 class="landing-heading">What kind of event are you planning?</h2>
+      <p class="landing-subtext">Tell me about your celebration and I'll build you a complete party plan &mdash; from theme and decor to a ready-to-buy shopping list.</p>
 
       <div class="quick-picks">
-        <p class="quick-picks-label">Pick a party type:</p>
+        <p class="quick-picks-label">Pick an event type to begin:</p>
         <div class="quick-picks-grid">
-          <button class="quick-pick-btn" data-type="birthday">
+          <button class="quick-pick-btn" data-type="Birthday">
             <span class="quick-pick-icon" aria-hidden="true">&#x1F382;</span>
             <span>Birthday</span>
           </button>
-          <button class="quick-pick-btn" data-type="wedding">
+          <button class="quick-pick-btn" data-type="Wedding">
             <span class="quick-pick-icon" aria-hidden="true">&#x1F492;</span>
             <span>Wedding</span>
           </button>
-          <button class="quick-pick-btn" data-type="babyshower">
-            <span class="quick-pick-icon" aria-hidden="true">&#x1F476;</span>
-            <span>Baby Shower</span>
-          </button>
-          <button class="quick-pick-btn" data-type="graduation">
-            <span class="quick-pick-icon" aria-hidden="true">&#x1F393;</span>
-            <span>Graduation</span>
-          </button>
-          <button class="quick-pick-btn" data-type="retirement">
+          <button class="quick-pick-btn" data-type="Retirement">
             <span class="quick-pick-icon" aria-hidden="true">&#x1F3C6;</span>
             <span>Retirement</span>
           </button>
-          <button class="quick-pick-btn" data-type="holiday">
+          <button class="quick-pick-btn" data-type="Graduation">
+            <span class="quick-pick-icon" aria-hidden="true">&#x1F393;</span>
+            <span>Graduation</span>
+          </button>
+          <button class="quick-pick-btn" data-type="Holiday">
             <span class="quick-pick-icon" aria-hidden="true">&#x1F384;</span>
-            <span>Holiday Party</span>
+            <span>Holiday</span>
           </button>
-          <button class="quick-pick-btn" data-type="dinner">
-            <span class="quick-pick-icon" aria-hidden="true">&#x1F37D;</span>
-            <span>Dinner Party</span>
+          <button class="quick-pick-btn" data-type="Baby Shower">
+            <span class="quick-pick-icon" aria-hidden="true">&#x1F476;</span>
+            <span>Baby Shower</span>
           </button>
-          <button class="quick-pick-btn" data-type="anniversary">
+          <button class="quick-pick-btn" data-type="Anniversary">
             <span class="quick-pick-icon" aria-hidden="true">&#x1F495;</span>
             <span>Anniversary</span>
+          </button>
+          <button class="quick-pick-btn" data-type="Dinner Party">
+            <span class="quick-pick-icon" aria-hidden="true">&#x1F37D;</span>
+            <span>Dinner Party</span>
           </button>
         </div>
       </div>
     </div>
   </div>
-
-  <!-- ═══════════════════════════════════
-       LAYER 4 — FAB (camera / upload)
-       ═══════════════════════════════════ -->
-  <button id="fab" class="fab" title="Upload space photo" aria-label="Upload space photo">
-    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-  </button>
-  <input type="file" id="fab-file-input" accept="image/*" capture="environment" style="display:none">
 
   <!-- ═══════════════════════════════════
        LAYER 5 — BOTTOM SHEET (3-state)
@@ -132,8 +124,13 @@
       -->
     </div>
 
-    <!-- Full-state content: scrollable item list + products + checkout -->
+    <!-- Full-state content: plan card + scrollable item list + products + checkout -->
     <div class="sheet-body" id="sheet-body">
+      <!-- Party Plan checklist card (persistent, fills in live) -->
+      <div id="plan-card" class="plan-card hidden">
+        <!-- JS injects the plan checklist rows here -->
+      </div>
+
       <!-- Extracted items list -->
       <div id="sheet-items-list" class="sheet-items-list">
         <!-- JS injects extraction sections + extracted item rows here -->

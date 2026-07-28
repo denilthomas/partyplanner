@@ -1,7 +1,7 @@
 const express = require('express');
 const path = require('path');
 const { analyzeSpace, extractItems } = require('./mcp-servers/gemini-vision');
-const { searchInspiration, searchProducts, searchKits } = require('./mcp-servers/serper-search');
+const { searchProducts, searchKits } = require('./mcp-servers/serper-search');
 const { buildCheckoutPlan, createUCPCheckout, completeUCPCheckout } = require('./mcp-servers/ucp-checkout');
 
 const app = express();
@@ -71,20 +71,6 @@ app.post('/api/extract-items', async (req, res) => {
   } catch (err) {
     console.error('[extract-items] failed:', err.message);
     res.status(500).json({ error: 'Item extraction failed', detail: err.message, items: [] });
-  }
-});
-
-// ── Serper: Search inspiration images ──
-app.post('/api/search-inspiration', async (req, res) => {
-  const { query, max_results = 12 } = req.body || {};
-  if (!query) return res.status(400).json({ error: 'query required' });
-
-  try {
-    const images = await searchInspiration(query, max_results);
-    res.json({ query, images });
-  } catch (err) {
-    console.error('[inspiration] search failed:', err.message);
-    res.status(500).json({ error: 'Inspiration search failed', detail: err.message, images: [] });
   }
 });
 

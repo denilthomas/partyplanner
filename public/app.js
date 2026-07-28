@@ -5,20 +5,29 @@
   //  DATA LAYER
   // ══════════════════════════════════════
 
+  function emptyPlan() {
+    return {
+      eventType: null,   // "Birthday" | "Wedding" | ...
+      budget: null,      // number (USD)
+      guestCount: null,  // number
+      setting: null,     // "indoor" | "outdoor" | "both"
+      theme: null,       // { id, name }
+    };
+  }
+
   function loadData() {
     const defaults = {
+      partyPlan: emptyPlan(),
       partyBucket: [],
       chatHistory: [],
-      spacePhoto: null,
-      anchors: [],
       extractedItems: [],
-      themeName: '',
       inspirationUrls: [],
     };
     try {
       const raw = localStorage.getItem('partyplanner');
       if (!raw) return defaults;
-      return { ...defaults, ...JSON.parse(raw) };
+      const parsed = JSON.parse(raw);
+      return { ...defaults, ...parsed, partyPlan: { ...emptyPlan(), ...(parsed.partyPlan || {}) } };
     } catch { return defaults; }
   }
 
@@ -38,13 +47,9 @@
 
   const state = {
     apiMessages: [],
-    spaceBase64: null,
-    spaceMediaType: null,
-    anchors: [],
-    inspirationImages: [],
+    manifest: { themes: [] },
     inspirationUrls: [],
     extractedItems: [],
-    themeName: '',
     sheetState: 'collapsed',
     chatOpen: false,
   };
@@ -56,13 +61,7 @@
   const $ = (sel) => document.querySelector(sel);
   const $$ = (sel) => document.querySelectorAll(sel);
 
-  const workspace = $('#workspace');
-  const workspacePhotoWrap = $('#workspace-photo-wrap');
-  const workspacePhoto = $('#workspace-photo');
-  const anchorDotsContainer = $('#anchor-dots');
   const landingOverlay = $('#landing-overlay');
-  const fab = $('#fab');
-  const fabFileInput = $('#fab-file-input');
   const bottomSheet = $('#bottom-sheet');
   const sheetHandle = $('#sheet-handle');
   const sheetThemeName = $('#sheet-theme-name');
@@ -70,6 +69,7 @@
   const sheetBuckets = $('#sheet-buckets');
   const sheetBody = $('#sheet-body');
   const sheetItemsList = $('#sheet-items-list');
+  const planCard = $('#plan-card');
   const sheetProducts = $('#sheet-products');
   const sheetCheckout = $('#sheet-checkout');
   const sheetFooter = $('#sheet-footer');
@@ -168,62 +168,76 @@
   //  API CALLS
   // ══════════════════════════════════════
 
-  const PLANNER_SYSTEM = [
-    'You are a friendly, knowledgeable AI Party Planning Agent.',
+  const PLANNER_SYSTEM_BASE = [
+    'You are a friendly, knowledgeable AI Party Planning Agent. You guide the user through a short, ordered set of questions to build a PARTY PLAN, then help them source decor.',
     '',
-    'PIPELINE — follow these stages IN ORDER:',
+    'INTAKE — gather these ONE AT A TIME, in this order. Ask ONE question per message, keep it warm and brief. Skip anything already filled in the CURRENT PARTY PLAN below. Each time the user answers, call update_party_plan to record it.',
+    '  1. Event type (Birthday, Wedding, Retirement, Graduation, Holiday, Baby Shower, Anniversary, Dinner Party, etc.)',
+    '  2. Budget for the event (a dollar amount or range)',
+    '  3. Guest count (approximate number of people)',
+    '  4. Setting (indoor, outdoor, or both)',
+    '  5. Theme — ask if they have a theme in mind, and PROACTIVELY suggest a few of the trending themes listed below that fit their event type. When they choose one, call update_party_plan with its theme_id.',
     '',
-    'STAGE 1 — Gather basics (1-2 messages max, be brief):',
-    '- Party type and theme/style',
-    '- Approximate guest count',
-    '- Budget range',
-    'Once you have party type + theme, move to Stage 2. Do NOT linger here.',
-    '',
-    'STAGE 2 — Ask about their space:',
-    '- Call request_space_photo to show the upload UI.',
-    '- Say something like "Want to upload a photo of your space so I can tailor the decor? You can also skip this step."',
-    '- Wait for the user to upload or skip. Do NOT proceed until they respond.',
-    '',
-    'STAGE 3 — Search for inspiration:',
-    '- Call search_inspiration with a descriptive query matching their theme.',
-    '- Example: "bohemian garden party decor", "firetruck birthday party decorations"',
-    '- The app displays images as a selectable grid. Wait for the user to pick favorites.',
-    '- If user wants different options, call search_inspiration again with a refined query.',
-    '',
-    'STAGE 4 — Extraction happens automatically:',
-    '- After the user confirms inspiration images, the app automatically extracts buyable items using Gemini Vision.',
-    '- Items appear in the bottom sheet grouped by bucket (Tabletop, Wall & Backdrop, etc.).',
-    '- Respond with encouragement like "Great picks! I found X items from your inspiration. Review them in the panel below and tap Find Products when ready!"',
-    '- Do NOT try to list or search for items yourself.',
+    'AFTER THEME IS CHOSEN:',
+    '- The app shows curated inspiration images for that theme. The user picks their favorites and the app instantly lists buyable items in the bottom panel, grouped by bucket.',
+    '- Respond warmly, e.g. "Beautiful choice! Pick the looks you love and I\'ll pull together your shopping list."',
+    '- Do NOT try to list or search for products yourself — the app handles it when the user taps Find Products.',
     '',
     'ONGOING:',
     '- Keep responses concise: 1-3 sentences. Be warm and enthusiastic.',
-    '- If user asks to add/remove items, call update_party_bucket.',
-    '- Help with budget advice, quantity recommendations, and alternatives.',
-    '- NEVER ask "shall I add items to your bucket" before items have been shown.',
+    '- Use the CURRENT PARTY PLAN (budget, guest count, setting) to tailor every suggestion — e.g. scale quantities to guest count, respect the budget, favor outdoor-friendly decor when setting is outdoor.',
+    '- If the user asks to add or remove items, call update_party_bucket.',
+    '- NEVER ask to add items to the bucket before any items have been shown.',
+    '- Do NOT ask about a photo of their space — that is not part of this flow.',
   ].join('\n');
+
+  function buildSystemPrompt() {
+    const plan = data.partyPlan || emptyPlan();
+    const planLines = [
+      '',
+      'CURRENT PARTY PLAN (already known — do not re-ask these):',
+      `  Event type: ${plan.eventType || '(not set)'}`,
+      `  Budget: ${plan.budget != null ? '$' + plan.budget : '(not set)'}`,
+      `  Guest count: ${plan.guestCount != null ? plan.guestCount : '(not set)'}`,
+      `  Setting: ${plan.setting || '(not set)'}`,
+      `  Theme: ${plan.theme ? plan.theme.name : '(not set)'}`,
+    ];
+
+    // Themes available for this event type (featured first)
+    const themes = (state.manifest.themes || []);
+    const relevant = themes.filter(t =>
+      !plan.eventType || (t.eventTypes || []).some(e => e.toLowerCase() === String(plan.eventType).toLowerCase())
+    );
+    const pool = relevant.length ? relevant : themes;
+    const featured = pool.filter(t => t.featured);
+    const suggestList = (featured.length ? featured : pool).slice(0, 6);
+
+    const themeLines = ['', 'AVAILABLE CURATED THEMES (suggest these by name; use theme_id when recording a choice):'];
+    if (suggestList.length === 0) {
+      themeLines.push('  (none loaded yet)');
+    } else {
+      for (const t of suggestList) {
+        themeLines.push(`  - ${t.name} (theme_id: "${t.id}")${t.tags && t.tags.length ? ' — ' + t.tags.slice(0, 4).join(', ') : ''}`);
+      }
+    }
+    themeLines.push('If the user wants a theme not listed, pick the closest curated match and say so.');
+
+    return PLANNER_SYSTEM_BASE + '\n' + planLines.join('\n') + '\n' + themeLines.join('\n');
+  }
 
   const PLANNER_TOOLS = [
     {
-      name: 'search_inspiration',
-      description: 'Search for party decor inspiration images. Call this after gathering the party type and theme. Also call when the user wants different/refined inspiration.',
+      name: 'update_party_plan',
+      description: 'Record one or more answers into the Party Plan checklist. Call this whenever the user provides their event type, budget, guest count, setting, or chosen theme.',
       input_schema: {
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'Descriptive search query for party inspiration (e.g. "bohemian garden party decor", "rose gold elegant wedding table")' },
+          eventType: { type: 'string', description: 'Event type, e.g. "Birthday", "Wedding"' },
+          budget: { type: 'number', description: 'Budget in USD (a single number; use the midpoint if a range)' },
+          guestCount: { type: 'number', description: 'Approximate number of guests' },
+          setting: { type: 'string', enum: ['indoor', 'outdoor', 'both'], description: 'Where the event is held' },
+          theme_id: { type: 'string', description: 'The id of the chosen curated theme (from the available themes list). Setting this shows the inspiration images.' },
         },
-        required: ['query'],
-      },
-    },
-    {
-      name: 'request_space_photo',
-      description: 'Show the space photo upload UI in chat. Call this after gathering party basics (type, theme) to ask the user to upload a photo of their venue/space.',
-      input_schema: {
-        type: 'object',
-        properties: {
-          message: { type: 'string', description: 'Message to show with the upload prompt' },
-        },
-        required: ['message'],
       },
     },
     {
@@ -259,7 +273,7 @@
         body: JSON.stringify({
           model: 'claude-sonnet-4-6',
           max_tokens: 2048,
-          system: PLANNER_SYSTEM,
+          system: buildSystemPrompt(),
           tools: PLANNER_TOOLS,
           messages,
         }),
@@ -274,21 +288,6 @@
     }
   }
 
-  async function callAnalyzeSpace(base64, mediaType) {
-    try {
-      const res = await fetch('/api/analyze-space', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ image_base64: base64, media_type: mediaType }),
-      });
-      const d = await res.json();
-      return d.anchors || [];
-    } catch (err) {
-      console.error('Analyze space failed:', err);
-      return [];
-    }
-  }
-
   async function callExtractItems(images, spaceAnchors) {
     try {
       const res = await fetch('/api/extract-items', {
@@ -300,21 +299,6 @@
       return d.items || [];
     } catch (err) {
       console.error('Extract items failed:', err);
-      return [];
-    }
-  }
-
-  async function callSearchInspiration(query, maxResults) {
-    try {
-      const res = await fetch('/api/search-inspiration', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query, max_results: maxResults || 12 }),
-      });
-      const d = await res.json();
-      return d.images || [];
-    } catch (err) {
-      console.error('Inspiration search failed:', err);
       return [];
     }
   }
@@ -400,143 +384,120 @@
   });
 
   // ══════════════════════════════════════
-  //  FAB — UPLOAD SPACE PHOTO
+  //  THEME MANIFEST
   // ══════════════════════════════════════
 
-  fab.addEventListener('click', () => fabFileInput.click());
+  async function loadManifest() {
+    try {
+      const res = await fetch('themes/manifest.json', { cache: 'no-cache' });
+      const d = await res.json();
+      state.manifest = { themes: d.themes || [] };
+    } catch (err) {
+      console.error('Failed to load theme manifest:', err);
+      state.manifest = { themes: [] };
+    }
+  }
 
-  fabFileInput.addEventListener('change', async () => {
-    const file = fabFileInput.files[0];
-    if (!file) return;
-    fabFileInput.value = '';
-    await handleSpaceUpload(file);
-  });
+  function getTheme(themeId) {
+    return (state.manifest.themes || []).find(t => t.id === themeId) || null;
+  }
 
-  // Quick pick buttons on landing
+  // bbox pixel crop { x, y, w, h } → ImageKit transform URL
+  function buildImageKitCropUrl(url, crop) {
+    if (!url || !crop) return url || '';
+    const sep = url.includes('?') ? '&' : '?';
+    return `${url}${sep}tr=x-${crop.x},y-${crop.y},w-${crop.w},h-${crop.h}`;
+  }
+
+  // ══════════════════════════════════════
+  //  PARTY PLAN
+  // ══════════════════════════════════════
+
+  const PLAN_FIELDS = [
+    { key: 'eventType', label: 'Event' },
+    { key: 'budget', label: 'Budget' },
+    { key: 'guestCount', label: 'Guests' },
+    { key: 'setting', label: 'Setting' },
+    { key: 'theme', label: 'Theme' },
+  ];
+
+  function planValueText(key) {
+    const plan = data.partyPlan || {};
+    const v = plan[key];
+    if (v == null || v === '') return null;
+    if (key === 'budget') return '$' + v;
+    if (key === 'theme') return v.name || null;
+    if (key === 'setting') return v.charAt(0).toUpperCase() + v.slice(1);
+    return String(v);
+  }
+
+  function renderPlanCard() {
+    const plan = data.partyPlan || {};
+    const anySet = PLAN_FIELDS.some(f => planValueText(f.key) != null);
+    if (!anySet) {
+      planCard.classList.add('hidden');
+      return;
+    }
+    planCard.classList.remove('hidden');
+
+    const rows = PLAN_FIELDS.map(f => {
+      const val = planValueText(f.key);
+      const filled = val != null;
+      return `<div class="plan-row ${filled ? 'filled' : ''}">
+        <span class="plan-row-check">${filled ? '✓' : ''}</span>
+        <span class="plan-row-label">${f.label}</span>
+        <span class="plan-row-value ${filled ? '' : 'empty'}">${filled ? escapeHtml(val) : 'not set yet'}</span>
+      </div>`;
+    }).join('');
+
+    planCard.innerHTML = `<div class="plan-card-title">\u{1F389} Your Party Plan</div><div class="plan-card-rows">${rows}</div>`;
+  }
+
+  // Merge fields into the plan, persist, re-render. Returns true if a theme was newly set.
+  function applyPlanUpdate(fields) {
+    const plan = data.partyPlan || emptyPlan();
+    let themeSet = false;
+
+    if (fields.eventType != null) plan.eventType = fields.eventType;
+    if (fields.budget != null) plan.budget = fields.budget;
+    if (fields.guestCount != null) plan.guestCount = fields.guestCount;
+    if (fields.setting != null) plan.setting = fields.setting;
+
+    if (fields.theme_id) {
+      const theme = getTheme(fields.theme_id);
+      if (theme) {
+        plan.theme = { id: theme.id, name: theme.name };
+        themeSet = true;
+      }
+    }
+
+    data.partyPlan = plan;
+    saveData(data);
+    renderPlanCard();
+    if (data.partyPlan.theme) sheetThemeName.textContent = data.partyPlan.theme.name;
+    return themeSet;
+  }
+
+  // ══════════════════════════════════════
+  //  QUICK-PICK EVENT CHIPS
+  // ══════════════════════════════════════
+
   $$('.quick-pick-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      const type = btn.dataset.type;
+      const eventType = btn.dataset.type;
       landingOverlay.classList.add('hidden');
+      applyPlanUpdate({ eventType });
+      if (state.sheetState === 'collapsed') setSheetState('half');
       openChatDrawer();
-      chatInput.value = `I'm planning a ${btn.textContent.trim().toLowerCase()} party!`;
-      handleChatSend();
+      const seed = `I'm planning a ${eventType} event.`;
+      addChatMessage('user', seed);
+      state.apiMessages.push({ role: 'user', content: seed });
+      sendToLLM();
     });
   });
 
-  async function handleSpaceUpload(file) {
-    landingOverlay.classList.add('hidden');
-
-    const dataUrl = await compressImage(file, 1024, 0.85);
-    const parsed = dataUrlToBase64(dataUrl);
-    if (!parsed) return;
-
-    state.spaceBase64 = parsed.base64;
-    state.spaceMediaType = parsed.mediaType;
-
-    workspacePhoto.src = dataUrl;
-    workspacePhotoWrap.classList.remove('hidden');
-
-    sheetThemeName.textContent = 'Analyzing your space...';
-    setSheetState('collapsed');
-
-    const anchors = await callAnalyzeSpace(parsed.base64, parsed.mediaType);
-    state.anchors = anchors;
-    data.anchors = anchors;
-    data.spacePhoto = dataUrl;
-    saveData(data);
-
-    renderAnchorDots(anchors);
-
-    if (anchors.length > 0) {
-      sheetThemeName.textContent = `${anchors.length} anchor points found`;
-      sheetItemCount.textContent = 'Tap one to explore';
-      addChatMessage('assistant', `I found ${anchors.length} decoration zones in your space: ${anchors.map(a => a.label).join(', ')}. Now pick a party theme so I can find inspiration!`);
-    } else {
-      sheetThemeName.textContent = 'No anchors found';
-      addChatMessage('assistant', 'I couldn\'t detect clear anchor points, but we can still plan your party! Tell me what kind of party you\'re planning.');
-    }
-
-    openChatDrawer();
-  }
-
   // ══════════════════════════════════════
-  //  ANCHOR DOTS
-  // ══════════════════════════════════════
-
-  function renderAnchorDots(anchors) {
-    anchorDotsContainer.innerHTML = '';
-    anchors.forEach(anchor => {
-      const dot = document.createElement('button');
-      dot.className = 'anchor-dot anchor-dot--pulse';
-      dot.style.left = (anchor.position[0] / 10) + '%';
-      dot.style.top = (anchor.position[1] / 10) + '%';
-      dot.dataset.anchorId = anchor.id;
-      dot.setAttribute('aria-label', anchor.label);
-
-      dot.innerHTML = `
-        <span class="anchor-dot-ring"></span>
-        <span class="anchor-dot-label">${escapeHtml(anchor.label)}</span>
-      `;
-
-      dot.addEventListener('click', () => handleAnchorTap(anchor));
-
-      let pressTimer;
-      dot.addEventListener('touchstart', (e) => {
-        pressTimer = setTimeout(() => {
-          e.preventDefault();
-          showContextMenu(e.touches[0].clientX, e.touches[0].clientY, anchor);
-        }, 500);
-      }, { passive: false });
-      dot.addEventListener('touchend', () => clearTimeout(pressTimer));
-      dot.addEventListener('touchmove', () => clearTimeout(pressTimer));
-
-      anchorDotsContainer.appendChild(dot);
-    });
-  }
-
-  function handleAnchorTap(anchor) {
-    $$('.anchor-dot').forEach(d => d.classList.remove('anchor-dot--active'));
-    const dot = $(`[data-anchor-id="${anchor.id}"]`);
-    if (dot) dot.classList.add('anchor-dot--active');
-
-    const items = state.extractedItems.filter(it => it.anchor_id === anchor.id);
-    if (items.length > 0) {
-      renderItemsForAnchor(items, anchor.label);
-      setSheetState('half');
-    }
-  }
-
-  function renderItemsForAnchor(items, label) {
-    sheetItemsList.innerHTML = '';
-    const heading = document.createElement('div');
-    heading.className = 'checklist-heading';
-    heading.innerHTML = `<strong>${escapeHtml(label)}</strong> — ${items.length} item${items.length !== 1 ? 's' : ''}`;
-    sheetItemsList.appendChild(heading);
-
-    const list = document.createElement('div');
-    list.className = 'extracted-items-list';
-    items.forEach(item => {
-      const imgUrl = state.inspirationUrls[item.image_index] || '';
-      const thumbStyle = buildBboxThumbnailStyle(imgUrl, item.bbox);
-      const row = document.createElement('div');
-      row.className = 'extracted-item-row';
-      row.innerHTML = `<div class="extracted-item-label">
-        ${thumbStyle ? `<div class="extracted-item-thumb" style="${thumbStyle}"></div>` : '<div class="extracted-item-thumb extracted-item-thumb-empty"></div>'}
-        <div class="extracted-item-info">
-          <span class="extracted-item-name">${escapeHtml(item.item_name)}</span>
-          <span class="extracted-item-meta">${typeof item.estimated_price === 'number' ? formatCurrency(item.estimated_price) : escapeHtml(String(item.estimated_price || ''))}</span>
-        </div>
-      </div>`;
-      row.addEventListener('click', () => {
-        searchAndShowProducts(item);
-      });
-      list.appendChild(row);
-    });
-    sheetItemsList.appendChild(list);
-  }
-
-  // ══════════════════════════════════════
-  //  INSPIRATION SEARCH (Serper.dev)
+  //  INSPIRATION GRID (curated theme images)
   // ══════════════════════════════════════
 
   function renderInspirationGrid(images) {
@@ -589,7 +550,7 @@
       const card = document.createElement('div');
       card.className = 'pinterest-card';
       card.innerHTML = `<div class="pinterest-img-wrap" style="position:relative;">
-        <img src="${escapeHtml(img.image_url)}" alt="${escapeHtml(img.title)}" loading="lazy">
+        <img src="${escapeHtml(img.url)}" alt="inspiration" loading="lazy">
       </div>`;
       card.addEventListener('click', () => {
         if (selected.has(i)) selected.delete(i);
@@ -601,7 +562,7 @@
 
     confirmBtn.addEventListener('click', () => {
       confirmBtn.disabled = true;
-      confirmBtn.textContent = 'Extracting items...';
+      confirmBtn.textContent = 'Building your list...';
       grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
         c.style.pointerEvents = 'none';
         if (!selected.has(i)) c.classList.add('dimmed');
@@ -620,44 +581,21 @@
     scrollChatToBottom();
   }
 
-  async function handleInspirationConfirmed(selectedImages) {
-    state.inspirationUrls = selectedImages.map(img => img.image_url);
+  function handleInspirationConfirmed(selectedImages) {
+    // Each selected image is a manifest image object with pre-extracted items.
+    state.inspirationUrls = selectedImages.map(img => img.url);
     data.inspirationUrls = state.inspirationUrls;
 
     addChatMessage('user', `I picked ${selectedImages.length} inspiration image${selectedImages.length > 1 ? 's' : ''}!`);
-    addChatMessage('assistant', 'Analyzing inspiration images with Gemini Vision...');
 
-    const imagePayloads = [];
-    for (const img of selectedImages) {
-      try {
-        const resp = await fetch(img.image_url);
-        const blob = await resp.blob();
-        const dataUrl = await new Promise((resolve, reject) => {
-          const imgEl = new Image();
-          imgEl.crossOrigin = 'anonymous';
-          imgEl.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.min(imgEl.width, 1024);
-            canvas.height = Math.round(imgEl.height * (canvas.width / imgEl.width));
-            canvas.getContext('2d').drawImage(imgEl, 0, 0, canvas.width, canvas.height);
-            resolve(canvas.toDataURL('image/jpeg', 0.85));
-          };
-          imgEl.onerror = reject;
-          imgEl.src = URL.createObjectURL(blob);
-        });
-        const parsed = dataUrlToBase64(dataUrl);
-        if (parsed) imagePayloads.push(parsed);
-      } catch (err) {
-        console.warn('Could not convert inspiration image:', err);
-      }
-    }
+    // Merge pre-extracted items, carrying each item's source image url + crop.
+    const items = [];
+    selectedImages.forEach((img, imageIndex) => {
+      (img.items || []).forEach(it => {
+        items.push({ ...it, image_index: imageIndex, source_url: img.url });
+      });
+    });
 
-    if (imagePayloads.length === 0) {
-      addChatMessage('assistant', 'Could not load the inspiration images. Try selecting different ones.');
-      return;
-    }
-
-    const items = await callExtractItems(imagePayloads, state.anchors);
     state.extractedItems = items;
     data.extractedItems = items;
     saveData(data);
@@ -666,20 +604,9 @@
     renderExtractedItemsInSheet(items);
 
     if (items.length > 0) {
-      sheetThemeName.textContent = state.themeName || 'Party Items';
+      sheetThemeName.textContent = (data.partyPlan.theme && data.partyPlan.theme.name) || 'Party Items';
       sheetItemCount.textContent = `${items.length} items found`;
       setSheetState('half');
-
-      // Map items to anchor dots
-      items.forEach(item => {
-        if (item.anchor_id) {
-          const dot = $(`[data-anchor-id="${item.anchor_id}"]`);
-          if (dot) {
-            dot.classList.remove('anchor-dot--pulse');
-            dot.classList.add('anchor-dot--active');
-          }
-        }
-      });
 
       // Tell Claude what happened
       const bucketSummary = BUCKET_ORDER
@@ -689,7 +616,7 @@
       state.apiMessages.push({ role: 'user', content: `Extraction complete: ${items.length} items found across buckets: ${bucketSummary}. Items are displayed for the user to review.` });
       state.apiMessages.push({ role: 'assistant', content: [{ type: 'text', text: `Found ${items.length} items from your inspiration! Review them below and tap "Find Products" when you're ready.` }] });
     } else {
-      addChatMessage('assistant', 'No buyable items found in those images. Try different inspiration!');
+      addChatMessage('assistant', 'Hmm, those images don\'t have items ready yet. Try selecting different ones.');
       openChatDrawer();
     }
   }
@@ -736,14 +663,14 @@
       bucketItems.forEach((item, bi) => {
         const globalIdx = items.indexOf(item);
         const key = 'item_' + globalIdx;
-        const imgUrl = state.inspirationUrls[item.image_index] || '';
-        const thumbStyle = buildBboxThumbnailStyle(imgUrl, item.bbox);
+        const imgUrl = item.source_url || state.inspirationUrls[item.image_index] || '';
+        const thumbUrl = buildImageKitCropUrl(imgUrl, item.crop);
 
         const row = document.createElement('div');
         row.className = 'extracted-item-row';
         row.innerHTML = `<label class="extracted-item-label">
           <input type="checkbox" checked class="extracted-item-check" data-key="${key}">
-          ${thumbStyle ? `<div class="extracted-item-thumb" style="${thumbStyle}"></div>` : '<div class="extracted-item-thumb extracted-item-thumb-empty"></div>'}
+          ${thumbUrl ? `<div class="extracted-item-thumb"><img src="${escapeHtml(thumbUrl)}" alt="" loading="lazy"></div>` : '<div class="extracted-item-thumb extracted-item-thumb-empty"></div>'}
           <div class="extracted-item-info">
             <span class="extracted-item-name">${escapeHtml(item.item_name)}</span>
             <span class="extracted-item-meta">${typeof item.estimated_price === 'number' ? formatCurrency(item.estimated_price) : escapeHtml(String(item.estimated_price || ''))}</span>
@@ -998,7 +925,7 @@
       addChatMessage('user', `Uploaded ${images.length} image${images.length > 1 ? 's' : ''} for analysis.`);
       addChatMessage('assistant', 'Analyzing your images...');
 
-      const items = await callExtractItems(images, state.anchors);
+      const items = await callExtractItems(images, []);
       state.extractedItems = items;
       data.extractedItems = items;
       saveData(data);
@@ -1090,37 +1017,48 @@
   }
 
   async function processToolCall(tool) {
-    if (tool.name === 'search_inspiration') {
+    if (tool.name === 'update_party_plan') {
       const inp = tool.input || {};
-      const query = inp.query || '';
-      state.themeName = query;
-      data.themeName = query;
-      sheetThemeName.textContent = query;
-      saveData(data);
+      const themeSet = applyPlanUpdate(inp);
 
-      const images = await callSearchInspiration(query, 12);
-      if (images.length > 0) {
-        renderInspirationGrid(images);
+      const recorded = [];
+      if (inp.eventType != null) recorded.push(`event=${inp.eventType}`);
+      if (inp.budget != null) recorded.push(`budget=$${inp.budget}`);
+      if (inp.guestCount != null) recorded.push(`guests=${inp.guestCount}`);
+      if (inp.setting != null) recorded.push(`setting=${inp.setting}`);
+
+      if (themeSet) {
+        const theme = data.partyPlan.theme;
+        const manifestTheme = getTheme(theme.id);
+        const images = (manifestTheme && manifestTheme.images) || [];
+        recorded.push(`theme=${theme.name}`);
+        if (images.length > 0) {
+          renderInspirationGrid(images);
+          return {
+            type: 'tool_result',
+            tool_use_id: tool.id,
+            content: `Party plan updated (${recorded.join(', ')}). Showing ${images.length} curated inspiration images for "${theme.name}". The user is selecting their favorites — encourage them and wait for their picks.`,
+          };
+        }
         return {
           type: 'tool_result',
           tool_use_id: tool.id,
-          content: `Displayed ${images.length} inspiration images for "${query}". The user is selecting their favorites. Wait for them to confirm.`,
+          content: `Party plan updated (${recorded.join(', ')}), but that theme has no images yet. Suggest a different theme.`,
         };
       }
-      return {
-        type: 'tool_result',
-        tool_use_id: tool.id,
-        content: `No inspiration images found for "${query}". Ask the user to describe their theme differently and try again.`,
-      };
-    }
 
-    if (tool.name === 'request_space_photo') {
-      const inp = tool.input || {};
-      showSpaceUploadInChat(inp.message || 'Upload a photo of your space so I can tailor the decor to fit.');
+      if (inp.theme_id) {
+        return {
+          type: 'tool_result',
+          tool_use_id: tool.id,
+          content: `Theme id "${inp.theme_id}" is not in the curated library. Suggest one of the available themes by its exact theme_id.`,
+        };
+      }
+
       return {
         type: 'tool_result',
         tool_use_id: tool.id,
-        content: 'Space photo upload UI shown. Waiting for the user to upload a photo or skip.',
+        content: `Party plan updated (${recorded.join(', ') || 'no changes'}). Continue to the next unanswered question.`,
       };
     }
 
@@ -1157,117 +1095,6 @@
     }
 
     return { type: 'tool_result', tool_use_id: tool.id, content: 'Unknown tool.' };
-  }
-
-  function showSpaceUploadInChat(message) {
-    const msg = document.createElement('div');
-    msg.className = 'chat-message assistant';
-    msg.style.maxWidth = '100%';
-
-    const heading = document.createElement('div');
-    heading.className = 'space-upload-heading';
-    heading.innerHTML = '<strong>' + escapeHtml(message) + '</strong>';
-    msg.appendChild(heading);
-
-    const uploadArea = document.createElement('div');
-    uploadArea.className = 'space-upload-area';
-    uploadArea.innerHTML = '<div class="space-upload-icon">+</div><div class="space-upload-text">Tap to upload a photo of your space</div>';
-
-    const fileInput = document.createElement('input');
-    fileInput.type = 'file';
-    fileInput.accept = 'image/*';
-    fileInput.style.display = 'none';
-
-    const previewContainer = document.createElement('div');
-    previewContainer.className = 'space-upload-preview hidden';
-
-    let spaceImageData = null;
-
-    uploadArea.addEventListener('click', () => fileInput.click());
-
-    fileInput.addEventListener('change', async () => {
-      const file = fileInput.files[0];
-      if (!file) return;
-      const dataUrl = await compressImage(file, 1024, 0.85);
-      const parsed = dataUrlToBase64(dataUrl);
-      if (!parsed) return;
-
-      spaceImageData = parsed;
-      state.spaceBase64 = parsed.base64;
-      state.spaceMediaType = parsed.mediaType;
-
-      previewContainer.innerHTML = '';
-      const previewImg = document.createElement('img');
-      previewImg.src = dataUrl;
-      previewContainer.appendChild(previewImg);
-      previewContainer.classList.remove('hidden');
-      uploadArea.classList.add('hidden');
-      analyzeBtn.textContent = 'Analyze my space';
-
-      workspacePhoto.src = dataUrl;
-      workspacePhotoWrap.classList.remove('hidden');
-      landingOverlay.classList.add('hidden');
-      data.spacePhoto = dataUrl;
-      saveData(data);
-    });
-
-    msg.appendChild(uploadArea);
-    msg.appendChild(fileInput);
-    msg.appendChild(previewContainer);
-
-    const actions = document.createElement('div');
-    actions.className = 'space-upload-actions';
-
-    const skipBtn = document.createElement('button');
-    skipBtn.className = 'btn btn-secondary';
-    skipBtn.textContent = 'Skip';
-    skipBtn.addEventListener('click', () => {
-      skipBtn.disabled = true;
-      analyzeBtn.disabled = true;
-      uploadArea.style.pointerEvents = 'none';
-      addChatMessage('user', 'Skipping space photo.');
-      state.apiMessages.push({ role: 'user', content: 'I\'m skipping the space photo. Let\'s continue to finding inspiration.' });
-      sendToLLM();
-    });
-
-    const analyzeBtn = document.createElement('button');
-    analyzeBtn.className = 'btn btn-primary';
-    analyzeBtn.textContent = 'Upload a photo';
-    analyzeBtn.addEventListener('click', async () => {
-      if (!spaceImageData) {
-        fileInput.click();
-        return;
-      }
-      skipBtn.disabled = true;
-      analyzeBtn.disabled = true;
-      analyzeBtn.textContent = 'Analyzing...';
-      uploadArea.style.pointerEvents = 'none';
-
-      const anchors = await callAnalyzeSpace(spaceImageData.base64, spaceImageData.mediaType);
-      state.anchors = anchors;
-      data.anchors = anchors;
-      saveData(data);
-      renderAnchorDots(anchors);
-
-      if (anchors.length > 0) {
-        sheetThemeName.textContent = `${anchors.length} anchor points`;
-        const spaceMsg = `I uploaded my space photo. ${anchors.length} decoration zones found: ${anchors.map(a => a.label).join(', ')}. Now let's find inspiration!`;
-        addChatMessage('user', spaceMsg);
-        state.apiMessages.push({ role: 'user', content: spaceMsg });
-      } else {
-        addChatMessage('user', 'I uploaded my space photo. Let\'s find inspiration!');
-        state.apiMessages.push({ role: 'user', content: 'I uploaded my space photo. Let\'s find inspiration!' });
-      }
-      analyzeBtn.textContent = 'Done!';
-      sendToLLM();
-    });
-
-    actions.appendChild(skipBtn);
-    actions.appendChild(analyzeBtn);
-    msg.appendChild(actions);
-
-    chatMessages.appendChild(msg);
-    scrollChatToBottom();
   }
 
   // Chat image uploads
@@ -1384,7 +1211,6 @@
       } else if (action === 'remove') {
         const dot = $(`[data-anchor-id="${contextMenuTarget.id}"]`);
         if (dot) dot.remove();
-        state.anchors = state.anchors.filter(a => a.id !== contextMenuTarget.id);
       }
     });
   });
@@ -1624,20 +1450,18 @@
   //  INIT
   // ══════════════════════════════════════
 
-  function init() {
+  async function init() {
     updateBucketUI();
+    await loadManifest();
 
-    // Restore space photo if saved
-    if (data.spacePhoto) {
-      workspacePhoto.src = data.spacePhoto;
-      workspacePhotoWrap.classList.remove('hidden');
+    // Restore party plan checklist
+    renderPlanCard();
+    if (data.partyPlan && data.partyPlan.eventType) {
       landingOverlay.classList.add('hidden');
-
-      if (data.anchors && data.anchors.length > 0) {
-        state.anchors = data.anchors;
-        renderAnchorDots(data.anchors);
-        sheetThemeName.textContent = data.themeName || `${data.anchors.length} anchor points`;
-      }
+      if (state.sheetState === 'collapsed') setSheetState('half');
+    }
+    if (data.partyPlan && data.partyPlan.theme) {
+      sheetThemeName.textContent = data.partyPlan.theme.name;
     }
 
     // Restore extracted items
