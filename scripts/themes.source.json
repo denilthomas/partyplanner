@@ -1,0 +1,28 @@
+{
+  "_comment": "Curation input for the theme library. Maintain this file as you add themes. Run `node scripts/build-theme-manifest.js` to generate public/themes/manifest.json (Gemini extracts items + crops for each image). Each image url should be an ImageKit URL.",
+  "themes": [
+    {
+      "id": "boho-garden",
+      "name": "Boho Garden Party",
+      "eventTypes": ["Birthday", "Wedding", "Anniversary", "Baby Shower"],
+      "featured": true,
+      "tags": ["outdoor", "rustic", "floral", "neutral", "pampas"],
+      "palette": ["#d9c5a0", "#8a9a5b", "#e8ded1", "#c98a6d"],
+      "images": [
+        { "url": "https://ik.imagekit.io/REPLACE_ME/boho-garden/01.jpg", "credit": "", "license": "CC0", "source": "opensource" },
+        { "url": "https://ik.imagekit.io/REPLACE_ME/boho-garden/02.jpg", "credit": "", "license": "CC0", "source": "ai" }
+      ]
+    },
+    {
+      "id": "elegant-rose-gold",
+      "name": "Elegant Rose Gold",
+      "eventTypes": ["Wedding", "Anniversary", "Birthday", "Graduation"],
+      "featured": true,
+      "tags": ["elegant", "glam", "metallic", "blush"],
+      "palette": ["#b76e79", "#f7cac9", "#efe6dd", "#d4af37"],
+      "images": [
+        { "url": "https://ik.imagekit.io/REPLACE_ME/elegant-rose-gold/01.jpg", "credit": "", "license": "CC0", "source": "opensource" }
+      ]
+    }
+  ]
+}
