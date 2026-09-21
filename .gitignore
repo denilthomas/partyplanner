@@ -1,0 +1,5 @@
+node_modules/
+
+# Runtime-generated theme library (accreted at runtime)
+public/themes/generated/
+public/themes/generated.json

@@ -1,0 +1,25 @@
+{
+  "ucp": {
+    "version": "2026-04-08",
+    "type": "platform",
+    "name": "PartyPlanner AI Agent",
+    "description": "AI-powered party planning agent that helps users discover and purchase party supplies across multiple retailers.",
+    "homepage": "https://partyplanner.app",
+    "services": {
+      "dev.ucp.shopping": [{
+        "version": "2026-04-08",
+        "transport": "rest"
+      }]
+    },
+    "capabilities": {
+      "dev.ucp.shopping.checkout": [{ "version": "2026-04-08" }],
+      "dev.ucp.shopping.catalog.search": [{ "version": "2026-04-08" }]
+    },
+    "payment_handlers": {
+      "com.stripe": [{
+        "id": "stripe_partyplanner",
+        "version": "2026-04-08"
+      }]
+    }
+  }
+}

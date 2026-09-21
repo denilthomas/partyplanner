@@ -1,0 +1,66 @@
+{
+  "_comment": "GENERATED FILE — do not edit by hand. Produced by scripts/build-theme-manifest.js. This sample data lets the app run before real curation; regenerate with real ImageKit URLs.",
+  "themes": [
+    {
+      "id": "boho-garden",
+      "name": "Boho Garden Party",
+      "eventTypes": ["Birthday", "Wedding", "Anniversary", "Baby Shower"],
+      "featured": true,
+      "tags": ["outdoor", "rustic", "floral", "neutral", "pampas"],
+      "palette": ["#d9c5a0", "#8a9a5b", "#e8ded1", "#c98a6d"],
+      "images": [
+        {
+          "url": "https://ik.imagekit.io/REPLACE_ME/boho-garden/01.jpg",
+          "width": 1600,
+          "height": 1067,
+          "credit": "",
+          "license": "CC0",
+          "source": "opensource",
+          "items": [
+            { "item_name": "Pampas grass bundle", "bucket": "accent_decor", "search_query": "dried pampas grass decor bundle", "estimated_price": 18.99, "crop": { "x": 200, "y": 120, "w": 360, "h": 480 } },
+            { "item_name": "Macrame backdrop", "bucket": "wall_backdrop", "search_query": "boho macrame wedding backdrop", "estimated_price": 34.99, "crop": { "x": 640, "y": 80, "w": 620, "h": 560 } },
+            { "item_name": "Terracotta table runner", "bucket": "tabletop", "search_query": "terracotta gauze table runner boho", "estimated_price": 15.49, "crop": { "x": 260, "y": 720, "w": 900, "h": 240 } },
+            { "item_name": "Neutral balloon garland kit", "bucket": "wall_backdrop", "search_query": "boho neutral balloon garland arch kit", "estimated_price": 21.99, "crop": { "x": 1040, "y": 60, "w": 480, "h": 520 } }
+          ]
+        },
+        {
+          "url": "https://ik.imagekit.io/REPLACE_ME/boho-garden/02.jpg",
+          "width": 1600,
+          "height": 1067,
+          "credit": "",
+          "license": "CC0",
+          "source": "ai",
+          "items": [
+            { "item_name": "Rattan charger plates", "bucket": "tabletop", "search_query": "rattan charger plates set of 6", "estimated_price": 27.99, "crop": { "x": 180, "y": 560, "w": 420, "h": 380 } },
+            { "item_name": "Amber glass votives", "bucket": "accent_decor", "search_query": "amber glass votive candle holders set", "estimated_price": 16.99, "crop": { "x": 720, "y": 620, "w": 320, "h": 300 } },
+            { "item_name": "Dried floral centerpiece", "bucket": "food_display", "search_query": "dried flower centerpiece arrangement boho", "estimated_price": 24.99, "crop": { "x": 1080, "y": 480, "w": 440, "h": 460 } }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "elegant-rose-gold",
+      "name": "Elegant Rose Gold",
+      "eventTypes": ["Wedding", "Anniversary", "Birthday", "Graduation"],
+      "featured": true,
+      "tags": ["elegant", "glam", "metallic", "blush"],
+      "palette": ["#b76e79", "#f7cac9", "#efe6dd", "#d4af37"],
+      "images": [
+        {
+          "url": "https://ik.imagekit.io/REPLACE_ME/elegant-rose-gold/01.jpg",
+          "width": 1600,
+          "height": 1067,
+          "credit": "",
+          "license": "CC0",
+          "source": "opensource",
+          "items": [
+            { "item_name": "Rose gold balloon arch", "bucket": "wall_backdrop", "search_query": "rose gold balloon arch garland kit", "estimated_price": 19.99, "crop": { "x": 560, "y": 60, "w": 640, "h": 540 } },
+            { "item_name": "Blush sequin table runner", "bucket": "tabletop", "search_query": "rose gold sequin table runner", "estimated_price": 12.99, "crop": { "x": 240, "y": 700, "w": 920, "h": 260 } },
+            { "item_name": "Rose gold cake stand", "bucket": "food_display", "search_query": "rose gold metal cake stand", "estimated_price": 29.99, "crop": { "x": 700, "y": 420, "w": 380, "h": 420 } },
+            { "item_name": "Geometric tealight holders", "bucket": "accent_decor", "search_query": "rose gold geometric tealight candle holders", "estimated_price": 17.49, "crop": { "x": 1120, "y": 640, "w": 340, "h": 300 } }
+          ]
+        }
+      ]
+    }
+  ]
+}
