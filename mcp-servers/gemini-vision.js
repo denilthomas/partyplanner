@@ -82,42 +82,27 @@ Return a JSON array of anchor point objects. Return between 3 and 8 anchor point
  */
 async function extractItems(inspirationImagesBase64, spaceAnchors) {
   try {
-    const anchorDescriptions = spaceAnchors
-      .map((a) => `  - id: "${a.id}", label: "${a.label}", type: "${a.type}"`)
-      .join("\n");
+    const prompt = `You are an experienced event manager looking at these party mood-board images and deciding what to BUY to recreate the look. You are NOT cataloguing every object — you are curating the statement pieces a shopper actually needs.
 
-    const prompt = `You are a party-planning supply analyst. Analyze the provided inspiration images and extract every buyable party supply or decoration item you can see.
+Select ONLY the hero pieces: the decor that defines the look. Cap it at 3–5 items per image and about 8–12 items total across all images. Quality over quantity.
 
-For each item, return:
-- "item_name": descriptive name of the item (e.g. "gold foil number balloons", "red honeycomb fans")
+For each selected item, return:
+- "item_name": descriptive name (e.g. "gold foil number balloons", "boho pampas centerpiece")
 - "bucket": one of "tabletop", "wall_backdrop", "accent_decor", "activity_favors", or "food_display"
-- "search_query": a product search query to find this item online. Prioritize "All-in-One Kits" when possible (e.g. "155pc firetruck party pack" instead of individual plates, cups, napkins). Group similar items together into kit searches.
-- "estimated_price": estimated price in USD as a number (e.g. 12.99)
-- "bbox": bounding box [ymin, xmin, ymax, xmax] with values normalized from 0 to 1000 indicating where this item appears in its source inspiration image
-- "image_index": zero-based index indicating which inspiration image this item comes from
-- "anchor_id": which room anchor this item should map to (or null if no clear match)
+- "search_query": a recreation-oriented product search a shopper could order. STRONGLY prefer all-in-one kits/sets/units of purchase (e.g. "155pc dinosaur party tableware kit", "boho balloon garland arch kit") rather than individual plates/cups/napkins.
+- "estimated_price": estimated price in USD as a number (e.g. 24.99)
+- "importance": integer 1–5, where 5 = a must-have hero piece that defines the theme and 1 = minor. Rank so the most impactful pieces lead.
+- "bbox": bounding box [ymin, xmin, ymax, xmax] normalized 0–1000, locating the item in its source image
+- "image_index": zero-based index of which image this item comes from
 
-GRAVITY LOGIC for bucket assignment:
-- If an item's vertical center (average of ymin and ymax) is < 300 and the item is round or pleated (e.g. paper fans, honeycomb balls, hanging decorations), assign bucket "wall_backdrop" — these are likely hanging decorations.
-- If an item's vertical center is > 700 and the item is round and sits on a flat surface (e.g. plates, chargers, coasters), assign bucket "tabletop" — these are likely table items.
-- Use your judgment for items in between, considering context clues.
+RULES:
+- Think in KITS and SETS, not individual units. Collapse "plates + cups + napkins of the same theme" into one tableware-kit line.
+- DEDUPE across images: if the same item appears more than once, return it ONCE.
+- EXCLUDE entirely: walls, floors, ceilings, furniture, permanent fixtures, ambient greenery that isn't a decor prop, the food/drink itself, people, and indistinct background clutter.
+- If an item is low-confidence or visually ambiguous, SKIP it rather than guessing — a clean short list beats a noisy long one.
+- Bucket guidance: hanging/backdrop pieces → "wall_backdrop"; things on the table → "tabletop"; standalone props/vignettes → "accent_decor"; favors/games → "activity_favors"; cake stands/food-display props (not the food) → "food_display".
 
-ANCHOR MAPPING:
-Map items to the most appropriate room anchor based on their type:
-${anchorDescriptions}
-- "tabletop" items → anchors of type "surface" (tables, counters)
-- "wall_backdrop" items → anchors of type "wall"
-- Ceiling-hung items → anchors of type "ceiling"
-- Focal decorations → anchors of type "focal_point"
-- If no anchor fits, use null.
-
-FILTERING RULES — do NOT include:
-- Furniture (tables, chairs, shelves)
-- Actual food or drink items
-- Permanent fixtures (light switches, outlets, built-in shelving)
-- Any single item estimated above $100
-
-Return a JSON array of item objects. Group similar small items (plates, cups, napkins of the same theme) and suggest a kit-based search query instead of listing them individually.`;
+Return a JSON array of item objects, ordered by "importance" descending.`;
 
     const imageParts = inspirationImagesBase64.map((img) => ({
       inlineData: {

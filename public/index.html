@@ -51,50 +51,92 @@
        LAYER 3 — LANDING OVERLAY (shown when no space photo)
        ═══════════════════════════════════ -->
   <div id="landing-overlay" class="landing-overlay">
-    <div class="landing-content">
-      <div class="landing-camera-icon" aria-hidden="true">
-        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-      </div>
-      <h2 class="landing-heading">What kind of event are you planning?</h2>
-      <p class="landing-subtext">Tell me about your celebration and I'll build you a complete party plan &mdash; from theme and decor to a ready-to-buy shopping list.</p>
+    <div class="home-content">
+      <h1 class="home-heading">What sort of party are you planning?</h1>
+      <p class="home-subtext">Fill in a few details and I'll design a theme and a ready-to-shop plan. Tap the cards, or just tell me in the box below.</p>
 
-      <div class="quick-picks">
-        <p class="quick-picks-label">Pick an event type to begin:</p>
-        <div class="quick-picks-grid">
-          <button class="quick-pick-btn" data-type="Birthday">
-            <span class="quick-pick-icon" aria-hidden="true">&#x1F382;</span>
-            <span>Birthday</span>
-          </button>
-          <button class="quick-pick-btn" data-type="Wedding">
-            <span class="quick-pick-icon" aria-hidden="true">&#x1F492;</span>
-            <span>Wedding</span>
-          </button>
-          <button class="quick-pick-btn" data-type="Retirement">
-            <span class="quick-pick-icon" aria-hidden="true">&#x1F3C6;</span>
-            <span>Retirement</span>
-          </button>
-          <button class="quick-pick-btn" data-type="Graduation">
-            <span class="quick-pick-icon" aria-hidden="true">&#x1F393;</span>
-            <span>Graduation</span>
-          </button>
-          <button class="quick-pick-btn" data-type="Holiday">
-            <span class="quick-pick-icon" aria-hidden="true">&#x1F384;</span>
-            <span>Holiday</span>
-          </button>
-          <button class="quick-pick-btn" data-type="Baby Shower">
-            <span class="quick-pick-icon" aria-hidden="true">&#x1F476;</span>
-            <span>Baby Shower</span>
-          </button>
-          <button class="quick-pick-btn" data-type="Anniversary">
-            <span class="quick-pick-icon" aria-hidden="true">&#x1F495;</span>
-            <span>Anniversary</span>
-          </button>
-          <button class="quick-pick-btn" data-type="Dinner Party">
-            <span class="quick-pick-icon" aria-hidden="true">&#x1F37D;</span>
-            <span>Dinner Party</span>
-          </button>
-        </div>
+      <!-- 5 Party-Plan cards (the cards ARE the plan) -->
+      <div class="plan-cards" id="plan-cards">
+        <!-- JS renders the 5 editable cards here -->
       </div>
+
+      <button id="design-theme-btn" class="btn btn-primary design-theme-btn" disabled>Design my theme &rarr;</button>
+
+      <!-- Slim chat-assist lane -->
+      <div class="home-chat">
+        <input type="text" id="home-chat-input" class="home-chat-input" placeholder="Describe it in your own words, or ask me anything&hellip;">
+        <button id="home-chat-send" class="home-chat-send" aria-label="Send">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════
+       THEME SCREEN (facet chooser + extraction state)
+       ═══════════════════════════════════ -->
+  <div id="theme-screen" class="fullscreen-overlay hidden">
+    <div class="fs-header">
+      <button class="fs-back" id="theme-back" aria-label="Back">&larr;</button>
+      <div class="fs-titles">
+        <span class="fs-title" id="theme-title">Your theme</span>
+        <span class="fs-sub" id="theme-sub"></span>
+      </div>
+    </div>
+    <div class="fs-body">
+      <div class="theme-palette" id="theme-palette"></div>
+      <div class="facet-sections" id="facet-sections"></div>
+      <!-- extraction state overlay -->
+      <div id="extraction-overlay" class="extraction-overlay hidden">
+        <div class="extraction-scan" id="extraction-scan"></div>
+        <p class="extraction-copy">Spotting the hero pieces to recreate your look&hellip;</p>
+      </div>
+    </div>
+    <div class="fs-footer" id="theme-footer">
+      <button class="btn btn-secondary" id="theme-regen">Try a different look</button>
+      <button class="btn btn-primary" id="theme-use" disabled>Use this theme</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════
+       DECIDE SCREEN (choose what to shop for)
+       ═══════════════════════════════════ -->
+  <div id="decide-screen" class="fullscreen-overlay hidden">
+    <div class="fs-header">
+      <button class="fs-back" id="decide-back" aria-label="Back">&larr;</button>
+      <div class="fs-titles">
+        <span class="fs-title">Choose what to shop for</span>
+        <span class="fs-sub" id="decide-sub"></span>
+      </div>
+    </div>
+    <div class="fs-body">
+      <div id="decide-sections" class="decide-sections"></div>
+    </div>
+    <div class="fs-footer">
+      <button class="btn btn-primary" id="decide-shop" disabled>Find products</button>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════
+       CART SCREEN (decision hub + budget tracker)
+       ═══════════════════════════════════ -->
+  <div id="cart-screen" class="fullscreen-overlay hidden">
+    <div class="fs-header">
+      <button class="fs-back" id="cart-back" aria-label="Back">&larr;</button>
+      <div class="fs-titles">
+        <span class="fs-title">Your cart</span>
+        <span class="fs-sub" id="cart-sub"></span>
+      </div>
+    </div>
+    <div class="fs-body">
+      <div id="cart-list" class="cart-list"></div>
+    </div>
+    <div class="fs-footer cart-footer">
+      <div class="budget-tracker" id="budget-tracker">
+        <div class="budget-bar"><div class="budget-fill" id="budget-fill"></div></div>
+        <div class="budget-label" id="budget-label"></div>
+      </div>
+      <button class="btn btn-primary" id="cart-checkout">Checkout</button>
     </div>
   </div>
 

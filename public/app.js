@@ -7,11 +7,12 @@
 
   function emptyPlan() {
     return {
-      eventType: null,   // "Birthday" | "Wedding" | ...
-      budget: null,      // number (USD)
-      guestCount: null,  // number
-      setting: null,     // "indoor" | "outdoor" | "both"
-      theme: null,       // { id, name }
+      eventType: null,        // "Birthday" | "Wedding" | ...
+      budget: null,           // number (USD)
+      guestCount: null,       // number
+      setting: null,          // "indoor" | "outdoor" | "both"
+      themePreference: null,  // free-text theme/vibe the user wants
+      theme: null,            // { name, source, palette } once designed
     };
   }
 
@@ -169,74 +170,52 @@
   // ══════════════════════════════════════
 
   const PLANNER_SYSTEM_BASE = [
-    'You are a friendly, knowledgeable AI Party Planning Agent. You guide the user through a short, ordered set of questions to build a PARTY PLAN, then help them source decor.',
+    'You assist a card-based party planner. The user fills 5 cards (party type, budget, number of people, indoor/outdoor, theme) — the cards are the primary UI, not you.',
     '',
-    'INTAKE — gather these ONE AT A TIME, in this order. Ask ONE question per message, keep it warm and brief. Skip anything already filled in the CURRENT PARTY PLAN below. Each time the user answers, call update_party_plan to record it.',
-    '  1. Event type (Birthday, Wedding, Retirement, Graduation, Holiday, Baby Shower, Anniversary, Dinner Party, etc.)',
-    '  2. Budget for the event (a dollar amount or range)',
-    '  3. Guest count (approximate number of people)',
-    '  4. Setting (indoor, outdoor, or both)',
-    '  5. Theme — ask if they have a theme in mind, and PROACTIVELY suggest a few of the trending themes listed below that fit their event type. When they choose one, call update_party_plan with its theme_id.',
-    '',
-    'AFTER THEME IS CHOSEN:',
-    '- The app shows curated inspiration images for that theme. The user picks their favorites and the app instantly lists buyable items in the bottom panel, grouped by bucket.',
-    '- Respond warmly, e.g. "Beautiful choice! Pick the looks you love and I\'ll pull together your shopping list."',
-    '- Do NOT try to list or search for products yourself — the app handles it when the user taps Find Products.',
-    '',
-    'ONGOING:',
-    '- Keep responses concise: 1-3 sentences. Be warm and enthusiastic.',
-    '- Use the CURRENT PARTY PLAN (budget, guest count, setting) to tailor every suggestion — e.g. scale quantities to guest count, respect the budget, favor outdoor-friendly decor when setting is outdoor.',
-    '- If the user asks to add or remove items, call update_party_bucket.',
-    '- NEVER ask to add items to the bucket before any items have been shown.',
-    '- Do NOT ask about a photo of their space — that is not part of this flow.',
+    'YOUR JOB:',
+    '- Parse the user\'s message into update_party_plan calls. One message may fill several slots at once (e.g. "40 people, backyard, $300, boho 1st birthday" → eventType, guestCount, setting, budget, theme).',
+    '- Proactively suggest a value for an empty slot when asked or clearly helpful (e.g. a sensible budget for the guest count, or 2-3 theme directions if they are unsure).',
+    '- Keep replies to 1-2 warm sentences. Do NOT interrogate one question at a time — the cards handle that.',
+    '- When the plan has at least a party type and a theme (or the user says "design it" / "go"), you MAY call create_theme to start designing.',
+    '- If the user asks to add or remove specific bucket items later, call update_party_bucket.',
   ].join('\n');
 
   function buildSystemPrompt() {
     const plan = data.partyPlan || emptyPlan();
     const planLines = [
       '',
-      'CURRENT PARTY PLAN (already known — do not re-ask these):',
-      `  Event type: ${plan.eventType || '(not set)'}`,
+      'CURRENT PARTY PLAN (already known — do not re-ask):',
+      `  Party type: ${plan.eventType || '(not set)'}`,
       `  Budget: ${plan.budget != null ? '$' + plan.budget : '(not set)'}`,
-      `  Guest count: ${plan.guestCount != null ? plan.guestCount : '(not set)'}`,
+      `  Number of people: ${plan.guestCount != null ? plan.guestCount : '(not set)'}`,
       `  Setting: ${plan.setting || '(not set)'}`,
-      `  Theme: ${plan.theme ? plan.theme.name : '(not set)'}`,
+      `  Theme: ${plan.theme ? (plan.theme.name || plan.theme) : (plan.themePreference || '(not set)')}`,
     ];
-
-    // Themes available for this event type (featured first)
-    const themes = (state.manifest.themes || []);
-    const relevant = themes.filter(t =>
-      !plan.eventType || (t.eventTypes || []).some(e => e.toLowerCase() === String(plan.eventType).toLowerCase())
-    );
-    const pool = relevant.length ? relevant : themes;
-    const featured = pool.filter(t => t.featured);
-    const suggestList = (featured.length ? featured : pool).slice(0, 6);
-
-    const themeLines = ['', 'AVAILABLE CURATED THEMES (suggest these by name; use theme_id when recording a choice):'];
-    if (suggestList.length === 0) {
-      themeLines.push('  (none loaded yet)');
-    } else {
-      for (const t of suggestList) {
-        themeLines.push(`  - ${t.name} (theme_id: "${t.id}")${t.tags && t.tags.length ? ' — ' + t.tags.slice(0, 4).join(', ') : ''}`);
-      }
-    }
-    themeLines.push('If the user wants a theme not listed, pick the closest curated match and say so.');
-
-    return PLANNER_SYSTEM_BASE + '\n' + planLines.join('\n') + '\n' + themeLines.join('\n');
+    return PLANNER_SYSTEM_BASE + '\n' + planLines.join('\n');
   }
 
   const PLANNER_TOOLS = [
     {
       name: 'update_party_plan',
-      description: 'Record one or more answers into the Party Plan checklist. Call this whenever the user provides their event type, budget, guest count, setting, or chosen theme.',
+      description: 'Fill or adjust one or more Party Plan cards from what the user said. Call whenever they mention party type, budget, number of people, setting, or a theme/vibe.',
       input_schema: {
         type: 'object',
         properties: {
-          eventType: { type: 'string', description: 'Event type, e.g. "Birthday", "Wedding"' },
+          eventType: { type: 'string', description: 'Party type, e.g. "Birthday", "Wedding"' },
           budget: { type: 'number', description: 'Budget in USD (a single number; use the midpoint if a range)' },
-          guestCount: { type: 'number', description: 'Approximate number of guests' },
-          setting: { type: 'string', enum: ['indoor', 'outdoor', 'both'], description: 'Where the event is held' },
-          theme_id: { type: 'string', description: 'The id of the chosen curated theme (from the available themes list). Setting this shows the inspiration images.' },
+          guestCount: { type: 'number', description: 'Approximate number of people' },
+          setting: { type: 'string', enum: ['indoor', 'outdoor', 'both'], description: 'Where the party is held' },
+          themePreference: { type: 'string', description: 'Free-text theme or vibe, e.g. "Paw Patrol", "boho muted"' },
+        },
+      },
+    },
+    {
+      name: 'create_theme',
+      description: 'Start designing the theme once the plan has a party type and a theme/vibe (or the user says go). Opens the theme designer.',
+      input_schema: {
+        type: 'object',
+        properties: {
+          theme_preference: { type: 'string', description: 'The theme/vibe to design around (optional; defaults to the plan\'s theme).' },
         },
       },
     },
@@ -383,26 +362,7 @@
     else setSheetState('collapsed');
   });
 
-  // ══════════════════════════════════════
-  //  THEME MANIFEST
-  // ══════════════════════════════════════
-
-  async function loadManifest() {
-    try {
-      const res = await fetch('themes/manifest.json', { cache: 'no-cache' });
-      const d = await res.json();
-      state.manifest = { themes: d.themes || [] };
-    } catch (err) {
-      console.error('Failed to load theme manifest:', err);
-      state.manifest = { themes: [] };
-    }
-  }
-
-  function getTheme(themeId) {
-    return (state.manifest.themes || []).find(t => t.id === themeId) || null;
-  }
-
-  // bbox pixel crop { x, y, w, h } → ImageKit transform URL
+  // bbox pixel crop { x, y, w, h } → ImageKit transform URL (legacy curated path)
   function buildImageKitCropUrl(url, crop) {
     if (!url || !crop) return url || '';
     const sep = url.includes('?') ? '&' : '?';
@@ -410,11 +370,11 @@
   }
 
   // ══════════════════════════════════════
-  //  PARTY PLAN
+  //  PARTY PLAN (sheet summary card)
   // ══════════════════════════════════════
 
   const PLAN_FIELDS = [
-    { key: 'eventType', label: 'Event' },
+    { key: 'eventType', label: 'Party type' },
     { key: 'budget', label: 'Budget' },
     { key: 'guestCount', label: 'Guests' },
     { key: 'setting', label: 'Setting' },
@@ -426,7 +386,7 @@
     const v = plan[key];
     if (v == null || v === '') return null;
     if (key === 'budget') return '$' + v;
-    if (key === 'theme') return v.name || null;
+    if (key === 'theme') return (v && (v.name || v)) || plan.themePreference || null;
     if (key === 'setting') return v.charAt(0).toUpperCase() + v.slice(1);
     return String(v);
   }
@@ -434,12 +394,8 @@
   function renderPlanCard() {
     const plan = data.partyPlan || {};
     const anySet = PLAN_FIELDS.some(f => planValueText(f.key) != null);
-    if (!anySet) {
-      planCard.classList.add('hidden');
-      return;
-    }
+    if (!anySet) { planCard.classList.add('hidden'); return; }
     planCard.classList.remove('hidden');
-
     const rows = PLAN_FIELDS.map(f => {
       const val = planValueText(f.key);
       const filled = val != null;
@@ -449,177 +405,632 @@
         <span class="plan-row-value ${filled ? '' : 'empty'}">${filled ? escapeHtml(val) : 'not set yet'}</span>
       </div>`;
     }).join('');
-
     planCard.innerHTML = `<div class="plan-card-title">\u{1F389} Your Party Plan</div><div class="plan-card-rows">${rows}</div>`;
   }
 
-  // Merge fields into the plan, persist, re-render. Returns true if a theme was newly set.
+  // Merge free-text-derived fields into the plan (used by the chat-assist agent).
   function applyPlanUpdate(fields) {
     const plan = data.partyPlan || emptyPlan();
-    let themeSet = false;
-
     if (fields.eventType != null) plan.eventType = fields.eventType;
     if (fields.budget != null) plan.budget = fields.budget;
     if (fields.guestCount != null) plan.guestCount = fields.guestCount;
     if (fields.setting != null) plan.setting = fields.setting;
-
-    if (fields.theme_id) {
-      const theme = getTheme(fields.theme_id);
-      if (theme) {
-        plan.theme = { id: theme.id, name: theme.name };
-        themeSet = true;
-      }
-    }
-
+    if (fields.themePreference != null) plan.themePreference = fields.themePreference;
     data.partyPlan = plan;
     saveData(data);
     renderPlanCard();
-    if (data.partyPlan.theme) sheetThemeName.textContent = data.partyPlan.theme.name;
-    return themeSet;
+    renderHomeCards();
+    refreshDesignBtn();
   }
 
   // ══════════════════════════════════════
-  //  QUICK-PICK EVENT CHIPS
+  //  HOME — cards-first party builder
   // ══════════════════════════════════════
 
-  $$('.quick-pick-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const eventType = btn.dataset.type;
-      landingOverlay.classList.add('hidden');
-      applyPlanUpdate({ eventType });
-      if (state.sheetState === 'collapsed') setSheetState('half');
-      openChatDrawer();
-      const seed = `I'm planning a ${eventType} event.`;
-      addChatMessage('user', seed);
-      state.apiMessages.push({ role: 'user', content: seed });
-      sendToLLM();
+  const EVENT_TYPES = ['Birthday', 'Wedding', 'Retirement', 'Graduation', 'Holiday', 'Baby Shower', 'Anniversary', 'Dinner Party'];
+  const BUDGET_RANGES = [
+    { label: '< $100', value: 75 },
+    { label: '$100–300', value: 200 },
+    { label: '$300–600', value: 450 },
+    { label: '$600+', value: 800 },
+  ];
+  const SETTINGS = ['indoor', 'outdoor', 'both'];
+  const THEME_SUGGESTIONS = {
+    Birthday: ['Paw Patrol', 'Dinosaur', 'Rainbow', 'Boho', 'Space'],
+    Wedding: ['Rose Gold', 'Boho Garden', 'Classic White', 'Rustic'],
+    Retirement: ['Golf', 'Tropical', 'Elegant Gold', 'Travel'],
+    Graduation: ['School Colors', 'Gold & Black', 'Adventure Awaits'],
+    Holiday: ['Winter Wonderland', 'Festive Red & Gold', 'Cozy Rustic'],
+    'Baby Shower': ['Little Star', 'Woodland', 'Pastel Cloud', 'Safari'],
+    Anniversary: ['Rose Gold', 'Romantic Red', 'Golden Years'],
+    'Dinner Party': ['Elegant Neutral', 'Italian Trattoria', 'Garden Table'],
+  };
+
+  const planCardsEl = $('#plan-cards');
+  const designThemeBtn = $('#design-theme-btn');
+
+  function chip(label, active, onClick) {
+    const b = document.createElement('button');
+    b.className = 'pp-chip' + (active ? ' active' : '');
+    b.textContent = label;
+    b.addEventListener('click', onClick);
+    return b;
+  }
+
+  function renderHomeCards() {
+    if (!planCardsEl) return;
+    const plan = data.partyPlan || emptyPlan();
+    planCardsEl.innerHTML = '';
+
+    // 1. Party type
+    const typeCard = cardShell('Party type', plan.eventType);
+    const typeWrap = document.createElement('div');
+    typeWrap.className = 'pp-chips';
+    EVENT_TYPES.forEach(t => typeWrap.appendChild(chip(t, plan.eventType === t, () => {
+      applyPlanUpdate({ eventType: t });
+    })));
+    typeCard.appendChild(typeWrap);
+    planCardsEl.appendChild(typeCard);
+
+    // 2. Budget
+    const budgetCard = cardShell('Budget', plan.budget != null ? '$' + plan.budget : null);
+    const budgetWrap = document.createElement('div');
+    budgetWrap.className = 'pp-chips';
+    BUDGET_RANGES.forEach(r => budgetWrap.appendChild(chip(r.label, plan.budget === r.value, () => {
+      applyPlanUpdate({ budget: r.value });
+    })));
+    const budgetInput = document.createElement('input');
+    budgetInput.type = 'number';
+    budgetInput.className = 'pp-num-input';
+    budgetInput.placeholder = 'Custom $';
+    budgetInput.min = '0';
+    if (plan.budget != null && !BUDGET_RANGES.some(r => r.value === plan.budget)) budgetInput.value = plan.budget;
+    budgetInput.addEventListener('change', () => {
+      const v = parseInt(budgetInput.value, 10);
+      if (!isNaN(v) && v > 0) applyPlanUpdate({ budget: v });
     });
-  });
+    budgetWrap.appendChild(budgetInput);
+    budgetCard.appendChild(budgetWrap);
+    planCardsEl.appendChild(budgetCard);
+
+    // 3. Number of people
+    const peopleCard = cardShell('Number of people', plan.guestCount != null ? String(plan.guestCount) : null);
+    const stepper = document.createElement('div');
+    stepper.className = 'pp-stepper';
+    const dec = document.createElement('button'); dec.className = 'pp-step'; dec.textContent = '−';
+    const num = document.createElement('input'); num.type = 'number'; num.className = 'pp-num-input'; num.min = '1';
+    num.value = plan.guestCount != null ? plan.guestCount : '';
+    num.placeholder = '0';
+    const inc = document.createElement('button'); inc.className = 'pp-step'; inc.textContent = '+';
+    dec.addEventListener('click', () => applyPlanUpdate({ guestCount: Math.max(1, (plan.guestCount || 0) - 5) }));
+    inc.addEventListener('click', () => applyPlanUpdate({ guestCount: (plan.guestCount || 0) + 5 }));
+    num.addEventListener('change', () => {
+      const v = parseInt(num.value, 10);
+      if (!isNaN(v) && v > 0) applyPlanUpdate({ guestCount: v });
+    });
+    stepper.appendChild(dec); stepper.appendChild(num); stepper.appendChild(inc);
+    peopleCard.appendChild(stepper);
+    planCardsEl.appendChild(peopleCard);
+
+    // 4. Setting
+    const setCard = cardShell('Indoor / Outdoor', plan.setting ? plan.setting[0].toUpperCase() + plan.setting.slice(1) : null);
+    const setWrap = document.createElement('div');
+    setWrap.className = 'pp-chips';
+    SETTINGS.forEach(s => setWrap.appendChild(chip(s[0].toUpperCase() + s.slice(1), plan.setting === s, () => {
+      applyPlanUpdate({ setting: s });
+    })));
+    setCard.appendChild(setWrap);
+    planCardsEl.appendChild(setCard);
+
+    // 5. Theme (chips per type + free text)
+    const themeVal = plan.themePreference || (plan.theme && plan.theme.name) || null;
+    const themeCard = cardShell('Theme', themeVal);
+    const themeWrap = document.createElement('div');
+    themeWrap.className = 'pp-chips';
+    (THEME_SUGGESTIONS[plan.eventType] || []).forEach(t => themeWrap.appendChild(chip(t, plan.themePreference === t, () => {
+      applyPlanUpdate({ themePreference: t });
+    })));
+    const themeInput = document.createElement('input');
+    themeInput.type = 'text';
+    themeInput.className = 'pp-text-input';
+    themeInput.placeholder = 'or describe your own vibe…';
+    if (plan.themePreference && !(THEME_SUGGESTIONS[plan.eventType] || []).includes(plan.themePreference)) themeInput.value = plan.themePreference;
+    themeInput.addEventListener('change', () => {
+      const v = themeInput.value.trim();
+      if (v) applyPlanUpdate({ themePreference: v });
+    });
+    themeWrap.appendChild(themeInput);
+    themeCard.appendChild(themeWrap);
+    planCardsEl.appendChild(themeCard);
+  }
+
+  function cardShell(title, value) {
+    const card = document.createElement('div');
+    card.className = 'pp-card';
+    const head = document.createElement('div');
+    head.className = 'pp-card-head';
+    head.innerHTML = `<span class="pp-card-title">${escapeHtml(title)}</span>` +
+      (value ? `<span class="pp-card-value">${escapeHtml(value)}</span>` : '<span class="pp-card-value empty">—</span>');
+    card.appendChild(head);
+    return card;
+  }
+
+  function refreshDesignBtn() {
+    if (!designThemeBtn) return;
+    const plan = data.partyPlan || {};
+    const ready = !!plan.eventType && !!(plan.themePreference || plan.theme);
+    designThemeBtn.disabled = !ready;
+  }
+
+  if (designThemeBtn) {
+    designThemeBtn.addEventListener('click', () => {
+      const plan = data.partyPlan || {};
+      startThemeCreation(plan.themePreference || (plan.theme && plan.theme.name) || '');
+    });
+  }
+
+  // Home chat-assist lane
+  const homeChatInput = $('#home-chat-input');
+  const homeChatSend = $('#home-chat-send');
+  function sendHomeChat() {
+    const text = (homeChatInput.value || '').trim();
+    if (!text) return;
+    homeChatInput.value = '';
+    openChatDrawer();
+    addChatMessage('user', text);
+    state.apiMessages.push({ role: 'user', content: text });
+    sendToLLM();
+  }
+  if (homeChatSend) homeChatSend.addEventListener('click', sendHomeChat);
+  if (homeChatInput) homeChatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendHomeChat(); } });
 
   // ══════════════════════════════════════
-  //  INSPIRATION GRID (curated theme images)
+  //  FULL-SCREEN OVERLAYS
   // ══════════════════════════════════════
 
-  function renderInspirationGrid(images) {
-    const msg = document.createElement('div');
-    msg.className = 'chat-message assistant';
-    msg.style.maxWidth = '100%';
+  function showScreen(id) { const el = $('#' + id); if (el) el.classList.remove('hidden'); }
+  function hideScreen(id) { const el = $('#' + id); if (el) el.classList.add('hidden'); }
 
-    const heading = document.createElement('div');
-    heading.className = 'pinterest-heading';
-    heading.textContent = 'Pick up to 3 inspiration images:';
-    msg.appendChild(heading);
+  const FACET_LABELS = { backdrop: 'Backdrop', table: 'Table decor', accent: 'Accents' };
+  const FACET_ORDER = ['backdrop', 'table', 'accent'];
 
-    const grid = document.createElement('div');
-    grid.className = 'pinterest-grid';
+  // ══════════════════════════════════════
+  //  THEME SCREEN — generate + facet chooser
+  // ══════════════════════════════════════
 
-    const selected = new Map();
+  async function startThemeCreation(pref) {
+    if (state.themeRegenCount == null) state.themeRegenCount = 0;
+    landingOverlay.classList.add('hidden');
+    showScreen('theme-screen');
+    $('#theme-title').textContent = 'Designing your theme…';
+    $('#theme-sub').textContent = '';
+    $('#theme-palette').innerHTML = '';
+    $('#facet-sections').innerHTML = '<div class="theme-loading"><div class="spinner"></div><span>Designing…</span></div>';
+    $('#theme-use').disabled = true;
 
-    const counter = document.createElement('div');
-    counter.className = 'pinterest-counter';
-    counter.textContent = '0/3 selected';
+    try {
+      const res = await fetch('/api/create-theme', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: data.partyPlan, theme_preference: pref }),
+      });
+      const d = await res.json();
+      if (d.error) throw new Error(d.error);
 
-    const confirmBtn = document.createElement('button');
-    confirmBtn.className = 'btn btn-primary pinterest-confirm-btn';
-    confirmBtn.textContent = 'Confirm (0)';
-    confirmBtn.disabled = true;
+      state.themeKey = d.key;
+      state.theme = d.theme || {};
+      state.cached = !!d.cached;
+      state.chosen = {};             // facet → image url
+      state.facetImages = {};        // facet → [urls]
+      state.cachedItemsByUrl = {};   // url → items (for hit path)
 
-    function updateUI() {
-      counter.textContent = `${selected.size}/3 selected`;
-      confirmBtn.textContent = `Confirm (${selected.size})`;
-      confirmBtn.disabled = selected.size === 0;
-      grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
-        const isSel = selected.has(i);
-        c.classList.toggle('selected', isSel);
-        c.classList.toggle('dimmed', !isSel && selected.size >= 3);
-        let badge = c.querySelector('.pinterest-selection-count');
-        if (isSel) {
-          if (!badge) {
-            badge = document.createElement('div');
-            badge.className = 'pinterest-selection-count';
-            c.querySelector('.pinterest-img-wrap').appendChild(badge);
-          }
-          badge.textContent = Array.from(selected.keys()).indexOf(i) + 1;
-        } else if (badge) {
-          badge.remove();
+      $('#theme-title').textContent = (state.theme.name || pref || 'Your theme');
+      $('#theme-sub').textContent = state.cached ? 'From your library' : 'Freshly designed';
+      renderPalette(state.theme.palette || []);
+      renderFacetChooser(d.facets || [], d.cached);
+    } catch (err) {
+      $('#facet-sections').innerHTML = `<div class="theme-error">Couldn't design that theme (${escapeHtml(err.message)}). <button class="btn btn-secondary" id="theme-retry">Try again</button></div>`;
+      const rb = $('#theme-retry'); if (rb) rb.addEventListener('click', () => startThemeCreation(pref));
+    }
+  }
+
+  function renderPalette(palette) {
+    $('#theme-palette').innerHTML = (palette || []).map(c => `<span class="swatch" style="background:${escapeHtml(c)}"></span>`).join('');
+  }
+
+  function renderFacetChooser(facets, cached) {
+    const container = $('#facet-sections');
+    container.innerHTML = '';
+    // normalize facets into { facet, prompt?, options? }
+    const byFacet = {};
+    (facets || []).forEach(f => { byFacet[f.facet] = f; });
+
+    FACET_ORDER.forEach(facet => {
+      const f = byFacet[facet];
+      if (!f) return;
+      const section = document.createElement('div');
+      section.className = 'facet-section';
+      section.innerHTML = `<div class="facet-label">${FACET_LABELS[facet]}</div>`;
+      const row = document.createElement('div');
+      row.className = 'facet-variations';
+      section.appendChild(row);
+      container.appendChild(section);
+
+      if (cached && f.options) {
+        state.facetImages[facet] = f.options.map(o => o.url);
+        f.options.forEach((o, i) => row.appendChild(makeVariationTile(facet, o.url, i, o.hasItems, o.id)));
+        // preselect first
+        if (f.options[0]) selectVariation(facet, f.options[0].url, row.firstChild);
+      } else {
+        // miss: 3 shimmer slots, then generate 3 variations
+        state.facetImages[facet] = [];
+        for (let i = 0; i < 3; i++) {
+          const slot = document.createElement('div');
+          slot.className = 'facet-tile shimmer';
+          slot.dataset.facet = facet;
+          slot.dataset.idx = i;
+          row.appendChild(slot);
+        }
+        generateFacetVariations(facet, f.prompt, row);
+      }
+    });
+  }
+
+  function makeVariationTile(facet, url, idx, hasItems, imageId) {
+    const tile = document.createElement('div');
+    tile.className = 'facet-tile';
+    tile.dataset.facet = facet;
+    tile.dataset.idx = idx;
+    if (imageId) tile.dataset.imageId = imageId;
+    tile.innerHTML = `<img src="${escapeHtml(url)}" alt="" loading="lazy"><span class="facet-check">✓</span>`;
+    tile.addEventListener('click', () => selectVariation(facet, url, tile));
+    return tile;
+  }
+
+  function selectVariation(facet, url, tile) {
+    state.chosen[facet] = url;
+    const row = tile.parentElement;
+    row.querySelectorAll('.facet-tile').forEach(t => t.classList.remove('selected'));
+    tile.classList.add('selected');
+    // enable "Use this theme" once all three facets have a pick
+    const allChosen = FACET_ORDER.every(f => state.chosen[f]);
+    $('#theme-use').disabled = !allChosen;
+  }
+
+  async function generateFacetVariations(facet, prompt, row) {
+    const styleAnchor = state.theme.style_anchor || '';
+    const fullPrompt = `${styleAnchor}\n\n${prompt}`.trim();
+    try {
+      const res = await fetch('/api/generate-image', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: fullPrompt, count: 3 }),
+      });
+      const d = await res.json();
+      const images = d.images || [];
+      state.facetImages[facet] = images;
+      const slots = row.querySelectorAll('.facet-tile');
+      slots.forEach((slot, i) => {
+        if (images[i]) {
+          const tile = makeVariationTile(facet, images[i], i, false);
+          row.replaceChild(tile, slot);
+        } else {
+          slot.classList.remove('shimmer');
+          slot.classList.add('facet-tile-empty');
+          slot.innerHTML = '<span>no image</span>';
         }
       });
+      // preselect first available
+      const firstTile = row.querySelector('.facet-tile:not(.facet-tile-empty)');
+      if (firstTile && !state.chosen[facet]) selectVariation(facet, images[0], firstTile);
+    } catch (err) {
+      row.querySelectorAll('.facet-tile').forEach(slot => {
+        slot.classList.remove('shimmer');
+        slot.classList.add('facet-tile-empty');
+        slot.innerHTML = '<span>failed</span>';
+      });
     }
-
-    images.forEach((img, i) => {
-      const card = document.createElement('div');
-      card.className = 'pinterest-card';
-      card.innerHTML = `<div class="pinterest-img-wrap" style="position:relative;">
-        <img src="${escapeHtml(img.url)}" alt="inspiration" loading="lazy">
-      </div>`;
-      card.addEventListener('click', () => {
-        if (selected.has(i)) selected.delete(i);
-        else if (selected.size < 3) selected.set(i, img);
-        updateUI();
-      });
-      grid.appendChild(card);
-    });
-
-    confirmBtn.addEventListener('click', () => {
-      confirmBtn.disabled = true;
-      confirmBtn.textContent = 'Building your list...';
-      grid.querySelectorAll('.pinterest-card').forEach((c, i) => {
-        c.style.pointerEvents = 'none';
-        if (!selected.has(i)) c.classList.add('dimmed');
-      });
-      handleInspirationConfirmed(Array.from(selected.values()));
-    });
-
-    msg.appendChild(grid);
-    msg.appendChild(counter);
-    const confirmWrap = document.createElement('div');
-    confirmWrap.className = 'pinterest-confirm-container';
-    confirmWrap.appendChild(confirmBtn);
-    msg.appendChild(confirmWrap);
-
-    chatMessages.appendChild(msg);
-    scrollChatToBottom();
   }
 
-  function handleInspirationConfirmed(selectedImages) {
-    // Each selected image is a manifest image object with pre-extracted items.
-    state.inspirationUrls = selectedImages.map(img => img.url);
-    data.inspirationUrls = state.inspirationUrls;
+  // Regenerate (capped)
+  const MAX_REGENERATIONS = 3;
+  const themeRegenBtn = $('#theme-regen');
+  if (themeRegenBtn) themeRegenBtn.addEventListener('click', () => {
+    state.themeRegenCount = (state.themeRegenCount || 0) + 1;
+    if (state.themeRegenCount >= MAX_REGENERATIONS) {
+      themeRegenBtn.disabled = true;
+      themeRegenBtn.textContent = 'No more looks';
+    }
+    startThemeCreation(data.partyPlan.themePreference || (data.partyPlan.theme && data.partyPlan.theme.name) || '');
+  });
 
-    addChatMessage('user', `I picked ${selectedImages.length} inspiration image${selectedImages.length > 1 ? 's' : ''}!`);
+  const themeBackBtn = $('#theme-back');
+  if (themeBackBtn) themeBackBtn.addEventListener('click', () => { hideScreen('theme-screen'); landingOverlay.classList.remove('hidden'); });
 
-    // Merge pre-extracted items, carrying each item's source image url + crop.
-    const items = [];
-    selectedImages.forEach((img, imageIndex) => {
-      (img.items || []).forEach(it => {
-        items.push({ ...it, image_index: imageIndex, source_url: img.url });
-      });
-    });
+  const themeUseBtn = $('#theme-use');
+  if (themeUseBtn) themeUseBtn.addEventListener('click', handleThemeAccepted);
 
-    state.extractedItems = items;
-    data.extractedItems = items;
+  async function handleThemeAccepted() {
+    // record theme on the plan
+    data.partyPlan.theme = { name: state.theme.name || '', source: 'generated', palette: state.theme.palette || [] };
     saveData(data);
+    renderPlanCard();
+    sheetThemeName.textContent = state.theme.name || '';
 
-    closeChatDrawer();
-    renderExtractedItemsInSheet(items);
+    const chosenUrls = FACET_ORDER.map(f => state.chosen[f]).filter(Boolean);
+    state.themeFacets = chosenUrls;
 
-    if (items.length > 0) {
-      sheetThemeName.textContent = (data.partyPlan.theme && data.partyPlan.theme.name) || 'Party Items';
-      sheetItemCount.textContent = `${items.length} items found`;
-      setSheetState('half');
+    // Save all generated variations to the library (miss path only)
+    if (!state.cached) {
+      const images = [];
+      FACET_ORDER.forEach(facet => (state.facetImages[facet] || []).forEach(url => {
+        if (url && url.startsWith('data:')) images.push({ facet, dataUrl: url });
+      }));
+      // fire and forget
+      fetch('/api/save-theme', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key: state.themeKey, theme: state.theme, images }),
+      }).catch(() => {});
+    }
 
-      // Tell Claude what happened
-      const bucketSummary = BUCKET_ORDER
-        .map(b => { const c = items.filter(i => i.bucket === b).length; return c > 0 ? `${BUCKET_META[b].label}: ${c}` : null; })
-        .filter(Boolean).join(', ');
-      addChatMessage('assistant', `Found ${items.length} items from your inspiration! (${bucketSummary}) Review them in the panel below and tap "Find Products" when ready.`);
-      state.apiMessages.push({ role: 'user', content: `Extraction complete: ${items.length} items found across buckets: ${bucketSummary}. Items are displayed for the user to review.` });
-      state.apiMessages.push({ role: 'assistant', content: [{ type: 'text', text: `Found ${items.length} items from your inspiration! Review them below and tap "Find Products" when you're ready.` }] });
-    } else {
-      addChatMessage('assistant', 'Hmm, those images don\'t have items ready yet. Try selecting different ones.');
-      openChatDrawer();
+    await runExtraction(chosenUrls);
+  }
+
+  // ══════════════════════════════════════
+  //  EXTRACTION → DECIDE
+  // ══════════════════════════════════════
+
+  async function runExtraction(chosenUrls) {
+    const overlay = $('#extraction-overlay');
+    overlay.classList.remove('hidden');
+    try {
+      // convert data/library URLs to base64 for the vision call
+      const payloads = [];
+      for (const url of chosenUrls) {
+        const parsed = await urlToBase64(url);
+        if (parsed) payloads.push(parsed);
+      }
+      const items = await callExtractItems(payloads, []);
+      // tag each item with the chosen facet image for thumbnails
+      items.forEach(it => { it.source_url = chosenUrls[it.image_index] || chosenUrls[0]; });
+      state.extractedItems = items;
+      data.extractedItems = items;
+      saveData(data);
+      overlay.classList.add('hidden');
+      hideScreen('theme-screen');
+      renderDecideScreen(items);
+    } catch (err) {
+      overlay.classList.add('hidden');
+      alert('Extraction failed: ' + err.message);
     }
   }
+
+  // fetch any URL (data: or /themes/...) and return { base64, mediaType }, downscaled
+  async function urlToBase64(url) {
+    try {
+      const blob = await (await fetch(url)).blob();
+      const dataUrl = await new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          const canvas = document.createElement('canvas');
+          const scale = Math.min(1, 1024 / Math.max(img.width, img.height));
+          canvas.width = Math.round(img.width * scale);
+          canvas.height = Math.round(img.height * scale);
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          resolve(canvas.toDataURL('image/jpeg', 0.85));
+        };
+        img.onerror = reject;
+        img.src = URL.createObjectURL(blob);
+      });
+      return dataUrlToBase64(dataUrl);
+    } catch { return null; }
+  }
+
+  function renderDecideScreen(items) {
+    showScreen('decide-screen');
+    $('#decide-sub').textContent = `${items.length} pieces found`;
+    const container = $('#decide-sections');
+    container.innerHTML = '';
+    const selected = new Set();
+
+    const grouped = {};
+    items.forEach((it, i) => {
+      const b = it.bucket || 'accent_decor';
+      (grouped[b] = grouped[b] || []).push(i);
+    });
+
+    BUCKET_ORDER.forEach(bucket => {
+      const idxs = grouped[bucket];
+      if (!idxs || !idxs.length) return;
+      const meta = BUCKET_META[bucket] || { label: bucket, icon: '', color: '#888' };
+      // sort by importance desc
+      idxs.sort((a, b) => (items[b].importance || 0) - (items[a].importance || 0));
+
+      const section = document.createElement('details');
+      section.className = 'decide-section';
+      section.open = true;
+      const summary = document.createElement('summary');
+      summary.className = 'decide-summary';
+      summary.innerHTML = `<span>${meta.icon} ${escapeHtml(meta.label)}</span><span class="decide-count"></span>`;
+      section.appendChild(summary);
+
+      idxs.forEach(i => {
+        const it = items[i];
+        selected.add(i); // hero pieces pre-checked
+        const row = document.createElement('label');
+        row.className = 'decide-row';
+        const thumb = it.source_url ? buildBboxThumbnailStyle(it.source_url, it.bbox) : '';
+        row.innerHTML = `<input type="checkbox" checked data-i="${i}">
+          ${thumb ? `<span class="decide-thumb" style="${thumb}"></span>` : '<span class="decide-thumb empty"></span>'}
+          <span class="decide-info"><span class="decide-name">${escapeHtml(it.item_name)}</span>
+          <span class="decide-price">${typeof it.estimated_price === 'number' ? formatCurrency(it.estimated_price) : ''}</span></span>`;
+        const cb = row.querySelector('input');
+        cb.addEventListener('change', () => {
+          if (cb.checked) selected.add(i); else selected.delete(i);
+          updateDecideCounts();
+        });
+        section.appendChild(row);
+      });
+      container.appendChild(section);
+    });
+
+    function updateDecideCounts() {
+      container.querySelectorAll('.decide-section').forEach(sec => {
+        const boxes = sec.querySelectorAll('input[type=checkbox]');
+        const on = Array.from(boxes).filter(b => b.checked).length;
+        const c = sec.querySelector('.decide-count');
+        if (c) c.textContent = `${on} of ${boxes.length}`;
+      });
+      $('#decide-shop').disabled = selected.size === 0;
+      $('#decide-shop').textContent = `Find products (${selected.size})`;
+    }
+    updateDecideCounts();
+
+    const shopBtn = $('#decide-shop');
+    shopBtn.onclick = () => {
+      const chosen = Array.from(selected).map(i => items[i]);
+      runShop(chosen);
+    };
+  }
+
+  const decideBackBtn = $('#decide-back');
+  if (decideBackBtn) decideBackBtn.addEventListener('click', () => { hideScreen('decide-screen'); showScreen('theme-screen'); });
+
+  // ══════════════════════════════════════
+  //  SHOP → CART decision hub
+  // ══════════════════════════════════════
+
+  async function runShop(selectedItems) {
+    const shopBtn = $('#decide-shop');
+    shopBtn.disabled = true;
+    shopBtn.textContent = 'Shopping for the best picks…';
+    try {
+      const res = await fetch('/api/shop', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: selectedItems, plan: data.partyPlan }),
+      });
+      const d = await res.json();
+      const picks = (d.picks || []).filter(p => p.product);
+      state.cart = picks.map(p => ({
+        id: generateId(),
+        item_name: p.item_name,
+        bucket: p.bucket,
+        product: p.product,
+        quantity: p.quantity || 1,
+        pack_size: p.pack_size || null,
+        reason: p.reason || '',
+      }));
+      data.partyBucket = state.cart.slice();
+      saveData(data);
+      hideScreen('decide-screen');
+      renderCart();
+    } catch (err) {
+      alert('Shopping failed: ' + err.message);
+    } finally {
+      shopBtn.disabled = false;
+      shopBtn.textContent = 'Find products';
+    }
+  }
+
+  function cartSubtotal() {
+    return (state.cart || []).reduce((s, l) => s + (l.product.price || 0) * (l.quantity || 1), 0);
+  }
+
+  function renderCart() {
+    showScreen('cart-screen');
+    const list = $('#cart-list');
+    list.innerHTML = '';
+    $('#cart-sub').textContent = `${(state.cart || []).length} items`;
+
+    (state.cart || []).forEach(line => {
+      const card = document.createElement('div');
+      card.className = 'cart-card';
+      const retailer = line.product.retailer || 'retailer';
+      const cta = line.product.link
+        ? `<a class="cart-cta" href="${escapeHtml(line.product.link)}" target="_blank" rel="noopener">View on ${escapeHtml(retailer)} →</a>`
+        : '';
+      card.innerHTML = `
+        <div class="cart-img">${line.product.thumbnail ? `<img src="${escapeHtml(line.product.thumbnail)}" alt="" loading="lazy">` : '<div class="cart-img-empty"></div>'}</div>
+        <div class="cart-main">
+          <div class="cart-name">${escapeHtml(line.item_name)}</div>
+          <div class="cart-title">${escapeHtml(line.product.title || '')}</div>
+          <div class="cart-price-row"><span class="cart-unit">${formatCurrency(line.product.price || 0)}</span>
+            <span class="cart-line-total">${formatCurrency((line.product.price || 0) * (line.quantity || 1))}</span></div>
+          <div class="cart-controls">
+            <div class="pp-stepper cart-stepper">
+              <button class="pp-step" data-act="dec">−</button>
+              <span class="cart-qty">${line.quantity}</span>
+              <button class="pp-step" data-act="inc">+</button>
+            </div>
+            ${cta}
+            <button class="cart-remove" data-act="remove" aria-label="Remove">✕</button>
+          </div>
+          ${line.reason ? `<div class="cart-reason">${escapeHtml(line.reason)}</div>` : ''}
+        </div>`;
+      card.querySelector('[data-act=dec]').addEventListener('click', () => changeCartQty(line.id, -1));
+      card.querySelector('[data-act=inc]').addEventListener('click', () => changeCartQty(line.id, 1));
+      card.querySelector('[data-act=remove]').addEventListener('click', () => removeCartLine(line.id));
+      list.appendChild(card);
+    });
+
+    renderBudgetTracker();
+  }
+
+  function changeCartQty(id, delta) {
+    const line = (state.cart || []).find(l => l.id === id);
+    if (!line) return;
+    line.quantity = Math.max(1, (line.quantity || 1) + delta);
+    data.partyBucket = state.cart.slice();
+    saveData(data);
+    renderCart();
+  }
+
+  function removeCartLine(id) {
+    state.cart = (state.cart || []).filter(l => l.id !== id);
+    data.partyBucket = state.cart.slice();
+    saveData(data);
+    updateBucketUI();
+    renderCart();
+  }
+
+  function renderBudgetTracker() {
+    const budget = data.partyPlan.budget;
+    const subtotal = cartSubtotal();
+    const fill = $('#budget-fill');
+    const label = $('#budget-label');
+    if (!budget) {
+      fill.style.width = '0%';
+      label.textContent = `Subtotal: ${formatCurrency(subtotal)}`;
+      $('#budget-tracker').classList.remove('over');
+      return;
+    }
+    const pct = Math.min(100, (subtotal / budget) * 100);
+    fill.style.width = pct + '%';
+    const over = subtotal > budget;
+    $('#budget-tracker').classList.toggle('over', over);
+    label.textContent = over
+      ? `${formatCurrency(subtotal)} — ${formatCurrency(subtotal - budget)} over your ${formatCurrency(budget)} budget`
+      : `You've used ${formatCurrency(subtotal)} of ${formatCurrency(budget)}`;
+  }
+
+  const cartBackBtn = $('#cart-back');
+  if (cartBackBtn) cartBackBtn.addEventListener('click', () => { hideScreen('cart-screen'); showScreen('decide-screen'); });
+
+  const cartCheckoutBtn = $('#cart-checkout');
+  if (cartCheckoutBtn) cartCheckoutBtn.addEventListener('click', () => {
+    // hand the consolidated cart to the existing checkout flow
+    data.partyBucket = (state.cart || []).map(l => ({
+      id: l.id, name: l.product.title || l.item_name, price: l.product.price || 0,
+      store: l.product.retailer || 'Google Shopping', bucket: l.bucket, quantity: l.quantity || 1,
+      url: l.product.link || '', image: l.product.thumbnail || '',
+    }));
+    saveData(data);
+    updateBucketUI();
+    hideScreen('cart-screen');
+    setSheetState('full');
+    bucketCheckoutBtn.click();
+  });
 
   // ══════════════════════════════════════
   //  EXTRACTED ITEMS IN BOTTOM SHEET
@@ -1019,46 +1430,32 @@
   async function processToolCall(tool) {
     if (tool.name === 'update_party_plan') {
       const inp = tool.input || {};
-      const themeSet = applyPlanUpdate(inp);
-
+      applyPlanUpdate(inp);
       const recorded = [];
-      if (inp.eventType != null) recorded.push(`event=${inp.eventType}`);
+      if (inp.eventType != null) recorded.push(`type=${inp.eventType}`);
       if (inp.budget != null) recorded.push(`budget=$${inp.budget}`);
-      if (inp.guestCount != null) recorded.push(`guests=${inp.guestCount}`);
+      if (inp.guestCount != null) recorded.push(`people=${inp.guestCount}`);
       if (inp.setting != null) recorded.push(`setting=${inp.setting}`);
-
-      if (themeSet) {
-        const theme = data.partyPlan.theme;
-        const manifestTheme = getTheme(theme.id);
-        const images = (manifestTheme && manifestTheme.images) || [];
-        recorded.push(`theme=${theme.name}`);
-        if (images.length > 0) {
-          renderInspirationGrid(images);
-          return {
-            type: 'tool_result',
-            tool_use_id: tool.id,
-            content: `Party plan updated (${recorded.join(', ')}). Showing ${images.length} curated inspiration images for "${theme.name}". The user is selecting their favorites — encourage them and wait for their picks.`,
-          };
-        }
-        return {
-          type: 'tool_result',
-          tool_use_id: tool.id,
-          content: `Party plan updated (${recorded.join(', ')}), but that theme has no images yet. Suggest a different theme.`,
-        };
-      }
-
-      if (inp.theme_id) {
-        return {
-          type: 'tool_result',
-          tool_use_id: tool.id,
-          content: `Theme id "${inp.theme_id}" is not in the curated library. Suggest one of the available themes by its exact theme_id.`,
-        };
-      }
-
+      if (inp.themePreference != null) recorded.push(`theme=${inp.themePreference}`);
+      const plan = data.partyPlan;
+      const ready = !!plan.eventType && !!(plan.themePreference || plan.theme);
       return {
         type: 'tool_result',
         tool_use_id: tool.id,
-        content: `Party plan updated (${recorded.join(', ') || 'no changes'}). Continue to the next unanswered question.`,
+        content: `Cards updated (${recorded.join(', ') || 'no changes'}).` +
+          (ready ? ' Party type and theme are set — you may call create_theme, or invite the user to tap "Design my theme".' : ' Still missing party type or theme.'),
+      };
+    }
+
+    if (tool.name === 'create_theme') {
+      const inp = tool.input || {};
+      const pref = inp.theme_preference || data.partyPlan.themePreference || (data.partyPlan.theme && data.partyPlan.theme.name) || '';
+      closeChatDrawer();
+      startThemeCreation(pref);
+      return {
+        type: 'tool_result',
+        tool_use_id: tool.id,
+        content: `Opened the theme designer for "${pref}". The user is choosing their favorite look per section.`,
       };
     }
 
@@ -1450,26 +1847,20 @@
   //  INIT
   // ══════════════════════════════════════
 
-  async function init() {
+  function init() {
     updateBucketUI();
-    await loadManifest();
 
-    // Restore party plan checklist
+    // Home: cards-first party builder
+    renderHomeCards();
+    refreshDesignBtn();
     renderPlanCard();
-    if (data.partyPlan && data.partyPlan.eventType) {
-      landingOverlay.classList.add('hidden');
-      if (state.sheetState === 'collapsed') setSheetState('half');
-    }
     if (data.partyPlan && data.partyPlan.theme) {
-      sheetThemeName.textContent = data.partyPlan.theme.name;
+      sheetThemeName.textContent = data.partyPlan.theme.name || '';
     }
 
-    // Restore extracted items
-    if (data.extractedItems && data.extractedItems.length > 0) {
-      state.extractedItems = data.extractedItems;
-      state.inspirationUrls = data.inspirationUrls || [];
-      sheetItemCount.textContent = `${data.extractedItems.length} items`;
-      renderExtractedItemsInSheet(data.extractedItems);
+    // Restore cart (if a shopping session was in progress)
+    if (data.partyBucket && data.partyBucket.length > 0) {
+      state.cart = data.partyBucket.filter(l => l.product).map(l => ({ ...l }));
     }
 
     // Restore chat
