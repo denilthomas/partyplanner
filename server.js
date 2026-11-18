@@ -405,7 +405,7 @@ app.post('/api/shop', async (req, res) => {
 
 if (require.main === module) {
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`PartyPlanner running at http://localhost:${PORT}`);
+    console.log(`Utsav running at http://localhost:${PORT}`);
   });
 }
 

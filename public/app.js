@@ -107,11 +107,11 @@
   // ══════════════════════════════════════
 
   const BUCKET_META = {
-    tabletop:        { label: 'Tabletop',          icon: '\u{1F37D}', color: '#6c5ce7' },
-    wall_backdrop:   { label: 'Wall & Backdrop',    icon: '\u{1F3A8}', color: '#e17055' },
-    accent_decor:    { label: 'Accent Decor',       icon: '\u{1F56F}', color: '#00b894' },
-    activity_favors: { label: 'Activity & Favors',  icon: '\u{1F381}', color: '#fdcb6e' },
-    food_display:    { label: 'Food Display',       icon: '\u{1F382}', color: '#0984e3' },
+    tabletop:        { label: 'Tabletop',          icon: '\u{1F37D}', color: '#5b6b5e' },
+    wall_backdrop:   { label: 'Wall & Backdrop',    icon: '\u{1F3A8}', color: '#8a5a44' },
+    accent_decor:    { label: 'Accent Decor',       icon: '\u{1F56F}', color: '#6b6457' },
+    activity_favors: { label: 'Activity & Favors',  icon: '\u{1F381}', color: '#8a7240' },
+    food_display:    { label: 'Food Display',       icon: '\u{1F382}', color: '#4f6170' },
   };
 
   const BUCKET_ORDER = ['tabletop', 'wall_backdrop', 'accent_decor', 'activity_favors', 'food_display'];
@@ -474,7 +474,7 @@
         <span class="plan-row-value ${filled ? '' : 'empty'}">${filled ? escapeHtml(val) : 'not set yet'}</span>
       </div>`;
     }).join('');
-    planCard.innerHTML = `<div class="plan-card-title">\u{1F389} Your Party Plan</div><div class="plan-card-rows">${rows}</div>`;
+    planCard.innerHTML = `<div class="plan-card-title">Your party plan</div><div class="plan-card-rows">${rows}</div>`;
   }
 
   // Merge free-text-derived fields into the plan (used by the chat-assist agent).
@@ -1173,7 +1173,7 @@
       const bucketItems = grouped[bucket];
       if (!bucketItems || bucketItems.length === 0) continue;
 
-      const meta = BUCKET_META[bucket] || { label: bucket, icon: '', color: '#636e72' };
+      const meta = BUCKET_META[bucket] || { label: bucket, icon: '', color: '#6b655d' };
 
       const section = document.createElement('div');
       section.className = 'extraction-section';
@@ -1747,7 +1747,7 @@
     if (!stripe || stripeCardElement) return;
     const elements = stripe.elements();
     stripeCardElement = elements.create('card', {
-      style: { base: { fontSize: '16px', color: '#2d3436', '::placeholder': { color: '#aab7c4' } } },
+      style: { base: { fontSize: '16px', color: '#1f1c19', '::placeholder': { color: '#b5aea4' } } },
     });
     stripeCardElement.mount('#stripe-card-element');
     stripeCardElement.on('change', (event) => {

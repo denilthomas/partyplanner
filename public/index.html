@@ -3,10 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>PartyPlanner</title>
+  <title>Utsav</title>
+  <link rel="preload" href="fonts/fraunces-latin-opsz-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="styles.css">
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#6c5ce7">
+  <meta name="theme-color" content="#faf8f5">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <script src="https://js.stripe.com/v3/"></script>
 </head>
@@ -16,7 +18,7 @@
        LAYER 1 — TOP BAR (fixed, transparent)
        ═══════════════════════════════════ -->
   <header class="top-bar">
-    <span class="top-bar-title">PartyPlanner</span>
+    <span class="top-bar-title">Utsav</span>
     <div class="top-bar-right">
       <button id="settings-btn" class="top-bar-icon-btn" title="Settings" aria-label="Settings">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -242,7 +244,7 @@
   <div id="chat-drawer-backdrop" class="chat-drawer-backdrop hidden"></div>
   <aside id="chat-drawer" class="chat-drawer">
     <div class="chat-drawer-header">
-      <h3>Party Planner AI</h3>
+      <h3>Utsav assistant</h3>
       <button id="chat-drawer-close" class="chat-drawer-close" aria-label="Close chat">&times;</button>
     </div>
     <div id="chat-messages" class="chat-messages"></div>
