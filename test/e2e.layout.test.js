@@ -38,15 +38,69 @@ test('home: scrolled content never shows through the top bar', async () => {
   await page.close();
 });
 
-test('home: chat lane is always reachable and the floating chat button covers nothing', async () => {
+test('home: describe box is its own section at the top and overlaps nothing', async () => {
   const { page } = await h.openApp(browser, server.url, { storage: { chatHistory: [{ role: 'user', text: 'hi' }, { role: 'assistant', text: 'hello' }] } });
-  assert.equal(await h.visible(page, '#chat-open-btn'), false, 'FAB hidden on Home (the lane replaces it)');
-  for (const y of [0, 300, 99999]) {
-    await page.$eval('#landing-overlay', (e, y) => e.scrollTo(0, y), y);
-    assert.equal((await h.hitTarget(page, '#home-chat-input')).ok, true, `lane tappable at scroll ${y}`);
-  }
+  assert.equal(await h.visible(page, '#chat-open-btn'), false, 'no floating chat button on Home');
+  const r = await page.evaluate(() => {
+    const box = (s) => { const r = document.querySelector(s).getBoundingClientRect(); return { top: r.top, bottom: r.bottom }; };
+    return { chat: box('.home-chat'), rows: box('#plan-cards'), heading: box('.home-heading'), position: getComputedStyle(document.querySelector('.home-chat')).position };
+  });
+  assert.notEqual(r.position, 'sticky');
+  assert.ok(r.chat.top > r.heading.bottom && r.chat.bottom < r.rows.top, 'heading → describe box → rows, in that order, no overlap');
+  assert.equal((await h.hitTarget(page, '#home-chat-input')).ok, true);
   await h.tap(page, '#home-chat-history');
   assert.ok(await page.$eval('#chat-drawer', (e) => e.classList.contains('open')), 'history button opens the drawer');
+  await page.close();
+});
+
+test('home: the whole plan and "Design my theme" fit on one phone screen', async () => {
+  const { page } = await h.openApp(browser, server.url);
+  await h.fillPlan(page);
+  const m = await page.evaluate(() => ({
+    btn: document.querySelector('#design-theme-btn').getBoundingClientRect().bottom,
+    sheetTop: document.querySelector('#bottom-sheet').getBoundingClientRect().top,
+    rows: document.querySelector('#plan-cards').getBoundingClientRect().height,
+  }));
+  assert.ok(m.btn <= m.sheetTop, `Design button bottom ${m.btn} is above the sheet peek ${m.sheetTop} without scrolling`);
+  assert.ok(m.rows <= 300, `5 rows are compact (${m.rows}px)`);
+  assert.equal((await h.hitTarget(page, '#design-theme-btn')).ok, true);
+  await page.close();
+});
+
+test('home: a row opens its chooser; a pick fills the row and closes it', async () => {
+  const { page } = await h.openApp(browser, server.url);
+  await page.click('#plan-cards .pp-row[data-field=setting]'); // real tap
+  assert.ok(await h.visible(page, '#field-picker'));
+  assert.equal(await h.text(page, '#field-picker-title'), 'Indoor / outdoor');
+  await page.evaluate(() => [...document.querySelectorAll('#field-picker .pp-chip')].find((b) => b.textContent === 'Outdoor').click());
+  assert.equal(await h.visible(page, '#field-picker'), false);
+  assert.equal(await h.text(page, '.pp-row[data-field=setting] .pp-row-value'), 'Outdoor');
+  // stepper stays open until Done
+  await page.click('#plan-cards .pp-row[data-field=guestCount]');
+  await h.tap(page, '#field-picker .pp-step:last-child');
+  await h.tap(page, '#field-picker .pp-step:last-child');
+  assert.ok(await h.visible(page, '#field-picker'));
+  await h.tap(page, '#field-picker-done');
+  assert.equal(await h.text(page, '.pp-row[data-field=guestCount] .pp-row-value'), '10 guests');
+  // backdrop closes too
+  await page.click('#plan-cards .pp-row[data-field=budget]');
+  await h.tap(page, '#field-picker-backdrop');
+  assert.equal(await h.visible(page, '#field-picker'), false);
+  await page.close();
+});
+
+test('home: rows the assistant fills are highlighted', async () => {
+  let n = 0;
+  const { page } = await h.openApp(browser, server.url, {
+    routes: { '/api/chat': () => (n++ === 0
+      ? { json: { content: [{ type: 'tool_use', id: 't1', name: 'update_party_plan', input: { eventType: 'Wedding', guestCount: 80 } }] } }
+      : { json: { content: [{ type: 'text', text: 'Done.' }] } }) },
+  });
+  await page.type('#home-chat-input', 'wedding for 80');
+  await page.keyboard.press('Enter');
+  await h.waitFor(page, () => document.querySelectorAll('.pp-row-flash').length > 0);
+  const flashed = await page.$$eval('.pp-row-flash', (els) => els.map((e) => e.dataset.field).sort());
+  assert.deepEqual(flashed, ['eventType', 'guestCount']);
   await page.close();
 });
 

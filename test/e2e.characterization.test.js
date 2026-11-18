@@ -8,9 +8,9 @@ let server, browser;
 before(async () => { server = await h.startServer(); browser = await h.launch(); });
 after(async () => { await browser?.close(); server?.stop(); });
 
-test('home: 5 plan cards; Design is gated on party type + theme', async () => {
+test('home: 5 plan rows; Design is gated on party type + theme', async () => {
   const { page, errors } = await h.openApp(browser, server.url);
-  assert.equal((await page.$$('#plan-cards .pp-card')).length, 5);
+  assert.equal((await page.$$('#plan-cards .pp-row')).length, 5);
   assert.equal(await page.$eval('#design-theme-btn', (b) => b.disabled), true);
   await h.clickChip(page, 0, 'Birthday');
   assert.equal(await page.$eval('#design-theme-btn', (b) => b.disabled), true, 'type alone is not enough');
@@ -24,7 +24,7 @@ test('plan persists across reload', async () => {
   const { page } = await h.openApp(browser, server.url);
   await h.fillPlan(page);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('#plan-cards .pp-card');
+  await page.waitForSelector('#plan-cards .pp-row');
   const plan = await page.evaluate(() => JSON.parse(localStorage.getItem('partyplanner')).partyPlan);
   assert.equal(plan.eventType, 'Birthday');
   assert.equal(plan.budget, 200);

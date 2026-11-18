@@ -3213,3 +3213,80 @@ body[data-stage] .bucket-badge { color: var(--text); background: rgba(0, 0, 0, 0
 .cart-cta, .product-result-link { color: var(--text); border-color: var(--border); }
 
 .home-chat-send, .chat-send-btn { background: var(--primary); }
+
+/* ══════════════════════════════════════
+   HOME: describe box on top, compact plan rows, field chooser
+   ══════════════════════════════════════ */
+
+/* Describe box: a section of its own (no longer pinned / overlapping). */
+.home-chat {
+  position: static;
+  bottom: auto;
+  display: block;
+  margin: 16px 0 0;
+  padding: 12px 12px 8px;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+.home-chat:focus-within { border-color: var(--primary); }
+.home-chat-input {
+  display: block; width: 100%; min-height: 48px; padding: 0 2px;
+  border: none; outline: none; resize: none; background: transparent;
+  font: inherit; font-size: 1rem; line-height: 1.4; color: var(--text);
+}
+.home-chat-input::placeholder { color: var(--text-light); }
+.home-chat-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 6px; }
+.home-chat-history { margin-left: -6px; }
+
+.home-divider {
+  display: flex; align-items: center; gap: 12px;
+  margin: 22px 0 12px; color: var(--text-light); font-size: 0.8rem;
+}
+.home-divider::before, .home-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
+
+/* Plan rows: one grouped list, ~52px per field. */
+.plan-cards {
+  display: block;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.pp-row {
+  display: flex; align-items: center; width: 100%; min-height: 52px; padding: 0 14px;
+  background: transparent; border: none; border-bottom: 1px solid var(--border);
+  font: inherit; color: var(--text); text-align: left; cursor: pointer;
+}
+.pp-row:last-child { border-bottom: none; }
+.pp-row:active { background: var(--surface-2); }
+.pp-row-label { flex: 1; font-size: 0.95rem; }
+.pp-row-value {
+  max-width: 58%; margin-right: 8px; font-size: 0.95rem; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pp-row-value.empty { color: var(--text-light); font-weight: 400; }
+.pp-row-chev { color: var(--text-light); font-size: 1.3rem; line-height: 1; }
+@keyframes pp-row-flash { from { background: #efe7d8; } to { background: transparent; } }
+.pp-row-flash { animation: pp-row-flash 1.6s ease-out; }
+
+.design-theme-btn { margin: 18px 0 8px; }
+
+/* Field chooser */
+.field-picker-backdrop { position: fixed; inset: 0; z-index: 300; background: rgba(31, 28, 25, 0.32); }
+.field-picker {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 301;
+  max-width: 520px; max-height: 70vh; margin: 0 auto; overflow-y: auto;
+  padding: 14px 16px calc(20px + var(--safe-bottom));
+  background: var(--surface); border-radius: 18px 18px 0 0; box-shadow: var(--shadow-lg);
+  animation: field-picker-up 0.22s ease-out;
+}
+@keyframes field-picker-up { from { transform: translateY(24px); opacity: 0; } }
+.field-picker-backdrop.hidden, .field-picker.hidden { display: none; }
+.field-picker-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.field-picker-title { font-family: var(--font-display); font-size: 1.15rem; font-weight: 600; }
+.field-picker-done { padding: 8px; border: none; background: none; font: inherit; font-weight: 600; color: var(--text); cursor: pointer; }
+.field-picker-hint { margin: 0 0 10px; font-size: 0.85rem; color: var(--text-light); }
+.field-picker .pp-chips { gap: 8px; }
+.field-picker .pp-chip { padding: 10px 14px; font-size: 0.95rem; }

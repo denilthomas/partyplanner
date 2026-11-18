@@ -32,7 +32,7 @@ test('journey: reload mid-flow resumes at the cart', async () => {
   const { page } = await h.openApp(browser, server.url);
   await h.reachCart(page);
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('#plan-cards .pp-card');
+  await page.waitForSelector('#plan-cards .pp-row');
   assert.ok(await h.visible(page, '#cart-screen'), 'cart screen restored');
   assert.equal(await h.visible(page, '#landing-overlay'), false);
   assert.equal(await h.text(page, '#cart-sub'), '2 items');

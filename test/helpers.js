@@ -96,27 +96,29 @@ async function openApp(browser, baseUrl, opts = {}) {
     }
   }, opts.storage || null);
   await page.goto(baseUrl + '/', { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('#plan-cards .pp-card');
+  await page.waitForSelector('#plan-cards .pp-row');
   return { page, calls, errors };
 }
 
 const visible = (page, sel) => page.$eval(sel, (el) => !el.classList.contains('hidden') && getComputedStyle(el).display !== 'none').catch(() => false);
 const text = (page, sel) => page.$eval(sel, (el) => el.textContent.trim());
 
+// Plan fields are compact rows; a row opens the chooser where the chips live.
+// cardIndex: 0 type · 1 budget · 2 people · 3 setting · 4 theme
 async function clickChip(page, cardIndex, label) {
-  await page.evaluate((i, l) => {
-    const card = document.querySelectorAll('#plan-cards .pp-card')[i];
-    [...card.querySelectorAll('.pp-chip')].find((b) => b.textContent === l).click();
-  }, cardIndex, label);
+  await page.evaluate((i) => document.querySelectorAll('#plan-cards .pp-row')[i].click(), cardIndex);
+  await page.waitForSelector('#field-picker:not(.hidden) .pp-chip');
+  await page.evaluate((l) => {
+    const c = [...document.querySelectorAll('#field-picker .pp-chip')].find((b) => b.textContent === l);
+    if (!c) throw new Error('no chip ' + l);
+    c.click();
+  }, label);
 }
 
 async function fillPlan(page) {
   await clickChip(page, 0, 'Birthday');
   await clickChip(page, 1, '$100–300');
-  await page.evaluate(() => {
-    const card = document.querySelectorAll('#plan-cards .pp-card')[4];
-    [...card.querySelectorAll('.pp-chip')].find((b) => b.textContent === 'Boho').click();
-  });
+  await clickChip(page, 4, 'Boho');
 }
 
 // Programmatic tap (logic only — see realTap for hit-testing).

@@ -478,12 +478,12 @@
   }
 
   // Merge free-text-derived fields into the plan (used by the chat-assist agent).
-  function applyPlanUpdate(fields) {
+  function applyPlanUpdate(fields, opts) {
     const result = M.applyPlanUpdate(data.partyPlan, fields);
     data.partyPlan = result.plan;
     saveData(data);
     renderPlanCard();
-    renderHomeCards();
+    renderHomeCards(opts && opts.flash ? result.changed.map(k => FIELD_OF_CHANGE[k]) : null);
     refreshDesignBtn();
     if (result.invalidatedTheme) sheetThemeName.textContent = M.themeLabel(data.partyPlan) || 'No theme selected';
     if (journey.state === 'cart') renderBudgetTracker();
@@ -524,102 +524,123 @@
     return b;
   }
 
-  function renderHomeCards() {
-    if (!planCardsEl) return;
+  // ── Home plan: 5 compact rows; tapping one opens the field chooser ──
+  // The chooser is a tiny machine of its own: closed | open(field).
+  const HOME_FIELDS = [
+    { key: 'eventType', label: 'Party type' },
+    { key: 'budget', label: 'Budget' },
+    { key: 'guestCount', label: 'People' },
+    { key: 'setting', label: 'Indoor / outdoor' },
+    { key: 'theme', label: 'Theme' },
+  ];
+  const FIELD_OF_CHANGE = { eventType: 'eventType', budget: 'budget', guestCount: 'guestCount', setting: 'setting', themePreference: 'theme' };
+  const fieldPicker = $('#field-picker');
+  const fieldPickerBackdrop = $('#field-picker-backdrop');
+  let pickerField = null;
+
+  function fieldValue(key) {
     const plan = data.partyPlan || emptyPlan();
-    planCardsEl.innerHTML = '';
-
-    // 1. Party type
-    const typeCard = cardShell('Party type', plan.eventType);
-    const typeWrap = document.createElement('div');
-    typeWrap.className = 'pp-chips';
-    EVENT_TYPES.forEach(t => typeWrap.appendChild(chip(t, plan.eventType === t, () => {
-      applyPlanUpdate({ eventType: t });
-    })));
-    typeCard.appendChild(typeWrap);
-    planCardsEl.appendChild(typeCard);
-
-    // 2. Budget
-    const budgetCard = cardShell('Budget', plan.budget != null ? '$' + plan.budget : null);
-    const budgetWrap = document.createElement('div');
-    budgetWrap.className = 'pp-chips';
-    BUDGET_RANGES.forEach(r => budgetWrap.appendChild(chip(r.label, plan.budget === r.value, () => {
-      applyPlanUpdate({ budget: r.value });
-    })));
-    const budgetInput = document.createElement('input');
-    budgetInput.type = 'number';
-    budgetInput.className = 'pp-num-input';
-    budgetInput.placeholder = 'Custom $';
-    budgetInput.min = '0';
-    if (plan.budget != null && !BUDGET_RANGES.some(r => r.value === plan.budget)) budgetInput.value = plan.budget;
-    budgetInput.addEventListener('change', () => {
-      const v = parseInt(budgetInput.value, 10);
-      if (!isNaN(v) && v > 0) applyPlanUpdate({ budget: v });
-    });
-    budgetWrap.appendChild(budgetInput);
-    budgetCard.appendChild(budgetWrap);
-    planCardsEl.appendChild(budgetCard);
-
-    // 3. Number of people
-    const peopleCard = cardShell('Number of people', plan.guestCount != null ? String(plan.guestCount) : null);
-    const stepper = document.createElement('div');
-    stepper.className = 'pp-stepper';
-    const dec = document.createElement('button'); dec.className = 'pp-step'; dec.textContent = '−';
-    const num = document.createElement('input'); num.type = 'number'; num.className = 'pp-num-input'; num.min = '1';
-    num.value = plan.guestCount != null ? plan.guestCount : '';
-    num.placeholder = '0';
-    const inc = document.createElement('button'); inc.className = 'pp-step'; inc.textContent = '+';
-    dec.addEventListener('click', () => applyPlanUpdate({ guestCount: Math.max(1, (plan.guestCount || 0) - 5) }));
-    inc.addEventListener('click', () => applyPlanUpdate({ guestCount: (plan.guestCount || 0) + 5 }));
-    num.addEventListener('change', () => {
-      const v = parseInt(num.value, 10);
-      if (!isNaN(v) && v > 0) applyPlanUpdate({ guestCount: v });
-    });
-    stepper.appendChild(dec); stepper.appendChild(num); stepper.appendChild(inc);
-    peopleCard.appendChild(stepper);
-    planCardsEl.appendChild(peopleCard);
-
-    // 4. Setting
-    const setCard = cardShell('Indoor / Outdoor', plan.setting ? plan.setting[0].toUpperCase() + plan.setting.slice(1) : null);
-    const setWrap = document.createElement('div');
-    setWrap.className = 'pp-chips';
-    SETTINGS.forEach(s => setWrap.appendChild(chip(s[0].toUpperCase() + s.slice(1), plan.setting === s, () => {
-      applyPlanUpdate({ setting: s });
-    })));
-    setCard.appendChild(setWrap);
-    planCardsEl.appendChild(setCard);
-
-    // 5. Theme (chips per type + free text)
-    const themeVal = plan.themePreference || (plan.theme && plan.theme.name) || null;
-    const themeCard = cardShell('Theme', themeVal);
-    const themeWrap = document.createElement('div');
-    themeWrap.className = 'pp-chips';
-    (THEME_SUGGESTIONS[plan.eventType] || []).forEach(t => themeWrap.appendChild(chip(t, plan.themePreference === t, () => {
-      applyPlanUpdate({ themePreference: t });
-    })));
-    const themeInput = document.createElement('input');
-    themeInput.type = 'text';
-    themeInput.className = 'pp-text-input';
-    themeInput.placeholder = 'or describe your own vibe…';
-    if (plan.themePreference && !(THEME_SUGGESTIONS[plan.eventType] || []).includes(plan.themePreference)) themeInput.value = plan.themePreference;
-    themeInput.addEventListener('change', () => {
-      const v = themeInput.value.trim();
-      if (v) applyPlanUpdate({ themePreference: v });
-    });
-    themeWrap.appendChild(themeInput);
-    themeCard.appendChild(themeWrap);
-    planCardsEl.appendChild(themeCard);
+    if (key === 'theme') return M.themeLabel(plan);
+    const v = plan[key];
+    if (v == null || v === '') return null;
+    if (key === 'budget') return '$' + v;
+    if (key === 'guestCount') return `${v} ${v === 1 ? 'guest' : 'guests'}`;
+    if (key === 'setting') return v[0].toUpperCase() + v.slice(1);
+    return String(v);
   }
 
-  function cardShell(title, value) {
-    const card = document.createElement('div');
-    card.className = 'pp-card';
-    const head = document.createElement('div');
-    head.className = 'pp-card-head';
-    head.innerHTML = `<span class="pp-card-title">${escapeHtml(title)}</span>` +
-      (value ? `<span class="pp-card-value">${escapeHtml(value)}</span>` : '<span class="pp-card-value empty">—</span>');
-    card.appendChild(head);
-    return card;
+  // flash: plan fields the assistant just changed, so the user sees what it did
+  function renderHomeCards(flash) {
+    if (!planCardsEl) return;
+    planCardsEl.innerHTML = '';
+    HOME_FIELDS.forEach(f => {
+      const v = fieldValue(f.key);
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'pp-row';
+      row.dataset.field = f.key;
+      row.innerHTML = `<span class="pp-row-label">${escapeHtml(f.label)}</span>` +
+        `<span class="pp-row-value${v ? '' : ' empty'}">${escapeHtml(v || 'Choose')}</span>` +
+        '<span class="pp-row-chev" aria-hidden="true">›</span>';
+      if (flash && flash.includes(f.key)) row.classList.add('pp-row-flash');
+      row.addEventListener('click', () => openFieldPicker(f.key));
+      planCardsEl.appendChild(row);
+    });
+    if (pickerField) renderFieldPicker(); // keep an open chooser in sync with agent updates
+  }
+
+  function openFieldPicker(key) {
+    pickerField = key;
+    renderFieldPicker();
+    fieldPicker.classList.remove('hidden');
+    fieldPickerBackdrop.classList.remove('hidden');
+  }
+
+  function closeFieldPicker() {
+    if (!fieldPicker) return;
+    pickerField = null;
+    fieldPicker.classList.add('hidden');
+    fieldPickerBackdrop.classList.add('hidden');
+  }
+
+  // Single-choice picks apply and close; typed values apply on Enter/blur.
+  function pick(fields) { applyPlanUpdate(fields); closeFieldPicker(); }
+
+  function renderFieldPicker() {
+    const plan = data.partyPlan || emptyPlan();
+    const field = HOME_FIELDS.find(f => f.key === pickerField);
+    $('#field-picker-title').textContent = field ? field.label : '';
+    const body = $('#field-picker-body');
+    body.innerHTML = '';
+    const chips = document.createElement('div');
+    chips.className = 'pp-chips';
+    body.appendChild(chips);
+
+    if (pickerField === 'eventType') {
+      EVENT_TYPES.forEach(t => chips.appendChild(chip(t, plan.eventType === t, () => pick({ eventType: t }))));
+    } else if (pickerField === 'budget') {
+      BUDGET_RANGES.forEach(r => chips.appendChild(chip(r.label, plan.budget === r.value, () => pick({ budget: r.value }))));
+      const input = document.createElement('input');
+      input.type = 'number'; input.className = 'pp-num-input'; input.placeholder = 'Custom $'; input.min = '0';
+      input.inputMode = 'numeric';
+      if (plan.budget != null && !BUDGET_RANGES.some(r => r.value === plan.budget)) input.value = plan.budget;
+      input.addEventListener('change', () => { const v = parseInt(input.value, 10); if (!isNaN(v) && v > 0) pick({ budget: v }); });
+      chips.appendChild(input);
+    } else if (pickerField === 'guestCount') {
+      const stepper = document.createElement('div');
+      stepper.className = 'pp-stepper';
+      const dec = document.createElement('button'); dec.className = 'pp-step'; dec.textContent = '−'; dec.setAttribute('aria-label', 'Fewer');
+      const num = document.createElement('input'); num.type = 'number'; num.className = 'pp-num-input'; num.min = '1'; num.inputMode = 'numeric';
+      num.value = plan.guestCount != null ? plan.guestCount : ''; num.placeholder = '0';
+      const inc = document.createElement('button'); inc.className = 'pp-step'; inc.textContent = '+'; inc.setAttribute('aria-label', 'More');
+      dec.addEventListener('click', () => applyPlanUpdate({ guestCount: Math.max(1, (data.partyPlan.guestCount || 0) - 5) }));
+      inc.addEventListener('click', () => applyPlanUpdate({ guestCount: (data.partyPlan.guestCount || 0) + 5 }));
+      num.addEventListener('change', () => { const v = parseInt(num.value, 10); if (!isNaN(v) && v > 0) applyPlanUpdate({ guestCount: v }); });
+      stepper.appendChild(dec); stepper.appendChild(num); stepper.appendChild(inc);
+      chips.replaceWith(stepper);
+    } else if (pickerField === 'setting') {
+      SETTINGS.forEach(st => chips.appendChild(chip(st[0].toUpperCase() + st.slice(1), plan.setting === st, () => pick({ setting: st }))));
+    } else if (pickerField === 'theme') {
+      const suggestions = THEME_SUGGESTIONS[plan.eventType] || [];
+      if (!suggestions.length) {
+        const hint = document.createElement('p');
+        hint.className = 'field-picker-hint';
+        hint.textContent = 'Pick a party type for suggestions, or describe your own vibe.';
+        body.insertBefore(hint, chips);
+      }
+      suggestions.forEach(t => chips.appendChild(chip(t, plan.themePreference === t, () => pick({ themePreference: t }))));
+      const input = document.createElement('input');
+      input.type = 'text'; input.className = 'pp-text-input'; input.placeholder = 'or describe your own vibe…';
+      if (plan.themePreference && !suggestions.includes(plan.themePreference)) input.value = plan.themePreference;
+      input.addEventListener('change', () => { const v = input.value.trim(); if (v) pick({ themePreference: v }); });
+      chips.appendChild(input);
+    }
+  }
+
+  if (fieldPicker) {
+    $('#field-picker-done').addEventListener('click', closeFieldPicker);
+    fieldPickerBackdrop.addEventListener('click', closeFieldPicker);
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && pickerField) closeFieldPicker(); });
   }
 
   function refreshDesignBtn() {
@@ -645,7 +666,7 @@
   if (homeChatSend) homeChatSend.addEventListener('click', sendHomeChat);
   const homeChatHistory = $('#home-chat-history');
   if (homeChatHistory) homeChatHistory.addEventListener('click', () => openChatDrawer());
-  if (homeChatInput) homeChatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendHomeChat(); } });
+  if (homeChatInput) homeChatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendHomeChat(); } });
 
   // ══════════════════════════════════════
   //  JOURNEY — one stage → exactly one surface
@@ -667,6 +688,7 @@
     bottomSheet.classList.toggle('sheet-offstage', stage !== 'home');
     $('#extraction-overlay').classList.toggle('hidden', stage !== 'extracting');
     document.body.dataset.stage = stage; // hook for CSS, tests and debugging
+    if (stage !== 'home') closeFieldPicker();
     placeChatButton();
     refreshThemeCtas();
   }
@@ -1542,7 +1564,7 @@
     const inp = tool.input || {};
 
     if (tool.name === 'update_party_plan') {
-      const { changed, invalidatedTheme } = applyPlanUpdate(inp);
+      const { changed, invalidatedTheme } = applyPlanUpdate(inp, { flash: true });
       const recorded = changed.map(k => {
         const v = data.partyPlan[k];
         return { eventType: `type=${v}`, budget: `budget=$${v}`, guestCount: `people=${v}`, setting: `setting=${v}`, themePreference: `theme=${v}` }[k];
