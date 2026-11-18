@@ -14,6 +14,19 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_API_KEY || '';
 app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+// ── Health: which upstreams are configured (no secrets returned) ──
+// Lets a developer — or an agent driving the app — see why a stage would fail.
+app.get('/api/health', (req, res) => {
+  res.json({
+    ok: true,
+    services: {
+      anthropic: !!ANTHROPIC_KEY,          // chat, theme + shopper agents
+      gemini: !!process.env.GEMINI_API_KEY, // image generation + extraction
+      serper: !!process.env.SERPER_API_KEY, // product search
+    },
+  });
+});
+
 // ── Claude API proxy ──
 app.post('/api/chat', async (req, res) => {
   if (!ANTHROPIC_KEY) {
@@ -216,14 +229,16 @@ function themePreferenceOf(plan, theme_preference) {
 
 // ── Theme Creation Agent (cache-first) ──
 app.post('/api/create-theme', async (req, res) => {
-  const { plan = {}, theme_preference } = req.body || {};
+  // fresh: true → skip the library (used by "Try a different look", which
+  // would otherwise get the identical cached theme back).
+  const { plan = {}, theme_preference, fresh = false } = req.body || {};
   const eventType = plan.eventType || '';
   const pref = themePreferenceOf(plan, theme_preference);
   const key = themeStore.keyFor(eventType, pref);
 
   try {
     // Cache lookup first
-    const cached = themeStore.findCachedTheme(eventType, pref);
+    const cached = fresh ? null : themeStore.findCachedTheme(eventType, pref);
     if (cached) {
       const facets = FACETS.map((facet) => ({
         facet,
@@ -388,6 +403,10 @@ app.post('/api/shop', async (req, res) => {
   }
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`PartyPlanner running at http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`PartyPlanner running at http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;

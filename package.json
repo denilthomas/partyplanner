@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "echo \"Tests passed\""
+    "test": "node --test --test-concurrency=1 'test/*.test.js'",
+    "test:unit": "node --test test/machines.test.js"
   },
   "dependencies": {
     "@omnixhq/ucp-client": "^3.0.0",

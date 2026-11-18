@@ -3075,3 +3075,38 @@ form {
 .budget-label { font-size: 0.82rem; font-weight: 600; color: var(--text-light); text-align: center; }
 .budget-tracker.over .budget-label { color: var(--danger-dark); }
 .cart-footer .btn { width: 100%; }
+
+/* ══════════════════════════════════════
+   STATE-DRIVEN STYLES (see machines.js)
+   ══════════════════════════════════════ */
+
+/* Journey: the bottom sheet only lives on Home. On full-screen steps it would
+   sit above (z-index 90 > 60) and swallow taps on the footer CTAs. */
+.bottom-sheet.sheet-offstage {
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(100%);
+}
+
+/* Explicit, retryable failure state for a stage (extraction, shopping). */
+.stage-error {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin: 0 0 12px; padding: 10px 12px;
+  border-radius: var(--radius-sm, 8px);
+  background: #fff4f2; color: #b33a2b; border: 1px solid #f3c7c0;
+  font-size: 0.85rem; line-height: 1.35;
+}
+.stage-error .btn { flex-shrink: 0; }
+
+/* Per-facet failure with its own retry. */
+.facet-retry { margin-top: 8px; }
+
+/* Agent loop: one turn at a time. */
+.chat-drawer.agent-busy .chat-send-btn,
+.home-chat-send:disabled { opacity: 0.5; cursor: progress; }
+
+.checkout-results.hidden { display: none; }
+
+/* Journey: the app title belongs to Home; on full-screen steps it collided with
+   the step's own header (e.g. "PartyPlanner" over "Boho Bloom"). Icons stay. */
+body[data-stage]:not([data-stage="home"]) .top-bar-title { visibility: hidden; }

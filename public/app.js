@@ -5,17 +5,17 @@
   //  DATA LAYER
   // ══════════════════════════════════════
 
-  function emptyPlan() {
-    return {
-      eventType: null,        // "Birthday" | "Wedding" | ...
-      budget: null,           // number (USD)
-      guestCount: null,       // number
-      setting: null,          // "indoor" | "outdoor" | "both"
-      themePreference: null,  // free-text theme/vibe the user wants
-      theme: null,            // { name, source, palette } once designed
-    };
-  }
+  // All state machines live in machines.js (pure, unit-tested). See that file
+  // for the journey / plan / cart / agent / designer definitions.
+  const M = window.PartyMachines;
+  const emptyPlan = M.emptyPlan;
 
+  // Persisted shape (localStorage 'partyplanner'):
+  //   partyPlan       — see M.emptyPlan()
+  //   partyBucket     — canonical cart lines, see M.normalizeLine()
+  //   chatHistory     — [{ role, text }] transcript
+  //   extractedItems  — last detected pieces (inputs to the Decide stage)
+  //   stage           — last journey stage (resumed via M.resumeStage)
   function loadData() {
     const defaults = {
       partyPlan: emptyPlan(),
@@ -23,21 +23,22 @@
       chatHistory: [],
       extractedItems: [],
       inspirationUrls: [],
+      stage: 'home',
     };
     try {
       const raw = localStorage.getItem('partyplanner');
       if (!raw) return defaults;
       const parsed = JSON.parse(raw);
-      return { ...defaults, ...parsed, partyPlan: { ...emptyPlan(), ...(parsed.partyPlan || {}) } };
+      return {
+        ...defaults, ...parsed,
+        partyPlan: { ...emptyPlan(), ...(parsed.partyPlan || {}) },
+        partyBucket: M.normalizeCart(parsed.partyBucket), // migrates legacy line shapes
+      };
     } catch { return defaults; }
   }
 
   function saveData(d) {
-    localStorage.setItem('partyplanner', JSON.stringify(d));
-  }
-
-  function generateId() {
-    return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    try { localStorage.setItem('partyplanner', JSON.stringify(d)); } catch (e) { console.warn('[partyplanner] save failed', e); }
   }
 
   let data = loadData();
@@ -47,13 +48,18 @@
   // ══════════════════════════════════════
 
   const state = {
-    apiMessages: [],
+    apiMessages: M.messagesFromTranscript(data.chatHistory), // agent memory survives reload
     manifest: { themes: [] },
     inspirationUrls: [],
-    extractedItems: [],
-    sheetState: 'collapsed',
+    extractedItems: data.extractedItems || [],
+    sheetState: 'collapsed',  // collapsed | half | full
+    sheetMode: 'browse',      // browse | checkout | results
     chatOpen: false,
   };
+
+  const journey = M.createJourney(M.resumeStage(data.stage, data));
+  const agent = M.createAgent();
+  const designer = M.createDesigner();
 
   // ══════════════════════════════════════
   //  DOM REFS
@@ -189,9 +195,39 @@
       `  Budget: ${plan.budget != null ? '$' + plan.budget : '(not set)'}`,
       `  Number of people: ${plan.guestCount != null ? plan.guestCount : '(not set)'}`,
       `  Setting: ${plan.setting || '(not set)'}`,
-      `  Theme: ${plan.theme ? (plan.theme.name || plan.theme) : (plan.themePreference || '(not set)')}`,
+      `  Theme: ${M.themeLabel(plan) || '(not set)'}${plan.theme ? ' (designed)' : ''}`,
     ];
-    return PLANNER_SYSTEM_BASE + '\n' + planLines.join('\n');
+    return PLANNER_SYSTEM_BASE + '\n' + planLines.join('\n') + '\n\n' + describeAppState();
+  }
+
+  // One snapshot of "where we are", shared by the agent prompt, tool results
+  // and the window.partyplanner debug handle.
+  function snapshot() {
+    const lines = data.partyBucket;
+    return {
+      stage: journey.state,
+      allowedEvents: journey.events(),
+      readiness: M.planReadiness(data.partyPlan),
+      cart: { lines: lines.length, ...M.budgetStatus(lines, data.partyPlan.budget) },
+      designer: { status: designer.status, regensLeft: designer.regensLeft() },
+      agent: agent.state,
+      sheet: { position: state.sheetState, mode: state.sheetMode },
+    };
+  }
+
+  function describeAppState() {
+    const s = snapshot();
+    const can = [];
+    if (journey.can('DESIGN')) can.push(s.readiness.ready ? 'create_theme (opens the designer)' : `create_theme once ${s.readiness.missing.join(' and ')} ${s.readiness.missing.length > 1 ? 'are' : 'is'} set`);
+    if (s.cart.lines) can.push('update_party_bucket (add/remove cart lines)');
+    const budget = s.cart.state === 'no_budget' ? 'no budget set'
+      : `${s.cart.state === 'over' ? 'over' : 'under'} the $${s.cart.budget} budget by $${s.cart.delta.toFixed(2)}`;
+    return [
+      'CURRENT APP STATE:',
+      `  Stage: ${s.stage} — the user is ${M.STAGE_DESCRIPTION[s.stage]}.`,
+      `  Cart: ${s.cart.lines} lines, ${formatCurrency(s.cart.subtotal)} (${budget}).`,
+      `  You can: ${can.join('; ') || 'answer questions'}.`,
+    ].join('\n');
   }
 
   const PLANNER_TOOLS = [
@@ -267,19 +303,25 @@
     }
   }
 
-  async function callExtractItems(images, spaceAnchors) {
+  // POST JSON and normalize failures into { error } so callers can branch on
+  // an explicit outcome instead of guessing from an empty array.
+  async function postJson(url, body, signal) {
     try {
-      const res = await fetch('/api/extract-items', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ images, space_anchors: spaceAnchors }),
-      });
-      const d = await res.json();
-      return d.items || [];
+      const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || d.error) return { ...d, error: d.detail || d.error?.message || d.error || `HTTP ${res.status}` };
+      return d;
     } catch (err) {
-      console.error('Extract items failed:', err);
-      return [];
+      if (err.name === 'AbortError') return { aborted: true, error: 'aborted' };
+      return { error: err.message || 'Network error' };
     }
+  }
+
+  // → { items, error? }
+  async function callExtractItems(images, spaceAnchors) {
+    const d = await postJson('/api/extract-items', { images, space_anchors: spaceAnchors });
+    if (d.error) console.error('Extract items failed:', d.error);
+    return { items: d.items || [], error: d.error || null };
   }
 
   async function callSearchProducts(query, maxResults) {
@@ -322,6 +364,26 @@
     bottomSheet.classList.add('sheet-' + newState);
   }
 
+  // Sheet content mode: browse (plan/items/products) | checkout (form) | results.
+  // The checkout form is never destroyed — results render in their own node.
+  let checkoutResultsEl = null;
+  function setSheetMode(mode) {
+    state.sheetMode = mode;
+    if (!checkoutResultsEl) {
+      checkoutResultsEl = document.createElement('div');
+      checkoutResultsEl.id = 'checkout-results';
+      checkoutResultsEl.className = 'checkout-results hidden';
+      sheetCheckout.appendChild(checkoutResultsEl);
+    }
+    const browsing = mode === 'browse';
+    sheetItemsList.style.display = browsing ? '' : 'none';
+    sheetProducts.style.display = browsing ? '' : 'none';
+    sheetCheckout.classList.toggle('hidden', browsing);
+    sheetCheckout.querySelectorAll(':scope > :not(#checkout-results)').forEach((el) => { el.style.display = mode === 'checkout' ? '' : 'none'; });
+    checkoutResultsEl.classList.toggle('hidden', mode !== 'results');
+    if (browsing) checkoutResultsEl.innerHTML = '';
+  }
+
   let sheetTouchStartY = 0;
   let sheetStartHeight = 0;
 
@@ -356,8 +418,13 @@
     else setSheetState('collapsed');
   });
 
-  // Bucket badge opens sheet to half
+  // Bucket badge: on Home it toggles the sheet; on a full-screen step (sheet is
+  // offstage) it jumps to the cart if there is one.
   bucketBadgeBtn.addEventListener('click', () => {
+    if (journey.state !== 'home') {
+      if (data.partyBucket.length && journey.can('OPEN_CART')) journey.send('OPEN_CART');
+      return;
+    }
     if (state.sheetState === 'collapsed') setSheetState('half');
     else setSheetState('collapsed');
   });
@@ -383,10 +450,10 @@
 
   function planValueText(key) {
     const plan = data.partyPlan || {};
+    if (key === 'theme') return M.themeLabel(plan);
     const v = plan[key];
     if (v == null || v === '') return null;
     if (key === 'budget') return '$' + v;
-    if (key === 'theme') return (v && (v.name || v)) || plan.themePreference || null;
     if (key === 'setting') return v.charAt(0).toUpperCase() + v.slice(1);
     return String(v);
   }
@@ -410,17 +477,15 @@
 
   // Merge free-text-derived fields into the plan (used by the chat-assist agent).
   function applyPlanUpdate(fields) {
-    const plan = data.partyPlan || emptyPlan();
-    if (fields.eventType != null) plan.eventType = fields.eventType;
-    if (fields.budget != null) plan.budget = fields.budget;
-    if (fields.guestCount != null) plan.guestCount = fields.guestCount;
-    if (fields.setting != null) plan.setting = fields.setting;
-    if (fields.themePreference != null) plan.themePreference = fields.themePreference;
-    data.partyPlan = plan;
+    const result = M.applyPlanUpdate(data.partyPlan, fields);
+    data.partyPlan = result.plan;
     saveData(data);
     renderPlanCard();
     renderHomeCards();
     refreshDesignBtn();
+    if (result.invalidatedTheme) sheetThemeName.textContent = M.themeLabel(data.partyPlan) || 'No theme selected';
+    if (journey.state === 'cart') renderBudgetTracker();
+    return result;
   }
 
   // ══════════════════════════════════════
@@ -557,16 +622,11 @@
 
   function refreshDesignBtn() {
     if (!designThemeBtn) return;
-    const plan = data.partyPlan || {};
-    const ready = !!plan.eventType && !!(plan.themePreference || plan.theme);
-    designThemeBtn.disabled = !ready;
+    designThemeBtn.disabled = !M.planReadiness(data.partyPlan).ready;
   }
 
   if (designThemeBtn) {
-    designThemeBtn.addEventListener('click', () => {
-      const plan = data.partyPlan || {};
-      startThemeCreation(plan.themePreference || (plan.theme && plan.theme.name) || '');
-    });
+    designThemeBtn.addEventListener('click', () => startThemeCreation(M.themeRequest(data.partyPlan)));
   }
 
   // Home chat-assist lane
@@ -574,74 +634,134 @@
   const homeChatSend = $('#home-chat-send');
   function sendHomeChat() {
     const text = (homeChatInput.value || '').trim();
-    if (!text) return;
+    if (!text || agent.state !== 'idle') return;
     homeChatInput.value = '';
     openChatDrawer();
     addChatMessage('user', text);
-    state.apiMessages.push({ role: 'user', content: text });
-    sendToLLM();
+    runAgent(text);
   }
   if (homeChatSend) homeChatSend.addEventListener('click', sendHomeChat);
   if (homeChatInput) homeChatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendHomeChat(); } });
 
   // ══════════════════════════════════════
-  //  FULL-SCREEN OVERLAYS
+  //  JOURNEY — one stage → exactly one surface
   // ══════════════════════════════════════
+  //
+  //  home ─DESIGN→ theme ─ACCEPT→ extracting ─EXTRACTED→ decide ─SHOP→ shopping ─SHOPPED→ cart
+  //                  ↑                 └──FAILED──┘          └──────────FAILED──────┘     │
+  //                  └──────────────────────── DESIGN (from decide/cart) ────────────────┘
+  //  (full table + guards in machines.js → JOURNEY)
 
-  function showScreen(id) { const el = $('#' + id); if (el) el.classList.remove('hidden'); }
-  function hideScreen(id) { const el = $('#' + id); if (el) el.classList.add('hidden'); }
+  const SURFACES = ['landing-overlay', 'theme-screen', 'decide-screen', 'cart-screen'];
+  const DEBUG = /[?&]debug\b/.test(location.search);
+
+  function renderStage(stage) {
+    const surface = M.STAGE_SURFACE[stage];
+    SURFACES.forEach((id) => { const el = $('#' + id); if (el) el.classList.toggle('hidden', id !== surface); });
+    // The bottom sheet belongs to Home. On full-screen steps it sat on top of
+    // the footer CTAs and swallowed taps, so it goes offstage there.
+    bottomSheet.classList.toggle('sheet-offstage', stage !== 'home');
+    $('#extraction-overlay').classList.toggle('hidden', stage !== 'extracting');
+    document.body.dataset.stage = stage; // hook for CSS, tests and debugging
+    refreshThemeCtas();
+  }
+
+  journey.subscribe((stage, t) => {
+    data.stage = stage;
+    saveData(data);
+    renderStage(stage);
+    if (DEBUG) console.debug(`[journey] ${t.from} --${t.event}--> ${stage}`, snapshot());
+  });
+
+  function showStageError(screenId, message, retry) {
+    clearStageError(screenId);
+    const body = $('#' + screenId + ' .fs-body');
+    if (!body) return;
+    const el = document.createElement('div');
+    el.className = 'stage-error';
+    el.setAttribute('role', 'alert');
+    el.innerHTML = `<span>${escapeHtml(message)}</span>`;
+    if (retry) {
+      const b = document.createElement('button');
+      b.className = 'btn btn-secondary btn-sm';
+      b.textContent = 'Try again';
+      b.addEventListener('click', retry);
+      el.appendChild(b);
+    }
+    body.prepend(el);
+  }
+  function clearStageError(screenId) { $$('#' + screenId + ' .stage-error').forEach((e) => e.remove()); }
 
   const FACET_LABELS = { backdrop: 'Backdrop', table: 'Table decor', accent: 'Accents' };
-  const FACET_ORDER = ['backdrop', 'table', 'accent'];
+  const FACET_ORDER = M.FACETS;
 
   // ══════════════════════════════════════
   //  THEME SCREEN — generate + facet chooser
   // ══════════════════════════════════════
+  //
+  //  designer.status: idle → loading → ready | error. Every request carries a
+  //  token (designer.req); a response whose token is stale is dropped, and the
+  //  previous fetch is aborted, so a slow old look can never overwrite a new one.
 
-  async function startThemeCreation(pref) {
-    if (state.themeRegenCount == null) state.themeRegenCount = 0;
-    landingOverlay.classList.add('hidden');
-    showScreen('theme-screen');
+  const themeRegenBtn = $('#theme-regen');
+  const themeUseBtn = $('#theme-use');
+  let themeAbort = null;
+
+  function refreshThemeCtas() {
+    if (!themeUseBtn) return;
+    const busy = journey.state === 'extracting';
+    const left = designer.regensLeft();
+    themeRegenBtn.disabled = busy || left <= 0;
+    themeRegenBtn.textContent = left <= 0 ? 'No more looks' : 'Try a different look';
+    themeUseBtn.disabled = busy || !designer.canAccept();
+  }
+
+  // Returns false if the journey can't enter the designer right now (e.g. mid-shopping).
+  function startThemeCreation(pref, opts) {
+    const fresh = !!(opts && opts.fresh);
+    if (!journey.send('DESIGN')) return false;
+    if (themeAbort) themeAbort.abort();
+    themeAbort = new AbortController();
+    const signal = themeAbort.signal;
+    const token = designer.begin(pref);
+    clearStageError('theme-screen');
     $('#theme-title').textContent = 'Designing your theme…';
     $('#theme-sub').textContent = '';
     $('#theme-palette').innerHTML = '';
     $('#facet-sections').innerHTML = '<div class="theme-loading"><div class="spinner"></div><span>Designing…</span></div>';
-    $('#theme-use').disabled = true;
+    refreshThemeCtas();
 
-    try {
-      const res = await fetch('/api/create-theme', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan: data.partyPlan, theme_preference: pref }),
-      });
-      const d = await res.json();
-      if (d.error) throw new Error(d.error);
-
-      state.themeKey = d.key;
-      state.theme = d.theme || {};
-      state.cached = !!d.cached;
-      state.chosen = {};             // facet → image url
-      state.facetImages = {};        // facet → [urls]
-      state.cachedItemsByUrl = {};   // url → items (for hit path)
-
-      $('#theme-title').textContent = (state.theme.name || pref || 'Your theme');
-      $('#theme-sub').textContent = state.cached ? 'From your library' : 'Freshly designed';
-      renderPalette(state.theme.palette || []);
-      renderFacetChooser(d.facets || [], d.cached);
-    } catch (err) {
-      $('#facet-sections').innerHTML = `<div class="theme-error">Couldn't design that theme (${escapeHtml(err.message)}). <button class="btn btn-secondary" id="theme-retry">Try again</button></div>`;
-      const rb = $('#theme-retry'); if (rb) rb.addEventListener('click', () => startThemeCreation(pref));
-    }
+    const body = { plan: data.partyPlan, theme_preference: pref };
+    if (fresh) body.fresh = true; // "Try a different look" must not get the same cached look back
+    postJson('/api/create-theme', body, signal).then((d) => {
+      if (!designer.isCurrent(token)) return; // superseded by a newer request
+      if (d.error) {
+        designer.status = 'error';
+        $('#facet-sections').innerHTML = `<div class="theme-error">Couldn't design that theme (${escapeHtml(d.error)}). <button class="btn btn-secondary" id="theme-retry">Try again</button></div>`;
+        $('#theme-retry').addEventListener('click', () => startThemeCreation(pref, { fresh }));
+        refreshThemeCtas();
+        return;
+      }
+      designer.key = d.key;
+      designer.theme = d.theme || {};
+      designer.cached = !!d.cached;
+      designer.status = 'ready';
+      $('#theme-title').textContent = designer.theme.name || pref || 'Your theme';
+      $('#theme-sub').textContent = designer.cached ? 'From your library' : 'Freshly designed';
+      renderPalette(designer.theme.palette || []);
+      renderFacetChooser(d.facets || [], designer.cached, token, signal);
+      refreshThemeCtas();
+    });
+    return true;
   }
 
   function renderPalette(palette) {
     $('#theme-palette').innerHTML = (palette || []).map(c => `<span class="swatch" style="background:${escapeHtml(c)}"></span>`).join('');
   }
 
-  function renderFacetChooser(facets, cached) {
+  function renderFacetChooser(facets, cached, token, signal) {
     const container = $('#facet-sections');
     container.innerHTML = '';
-    // normalize facets into { facet, prompt?, options? }
     const byFacet = {};
     (facets || []).forEach(f => { byFacet[f.facet] = f; });
 
@@ -650,6 +770,7 @@
       if (!f) return;
       const section = document.createElement('div');
       section.className = 'facet-section';
+      section.dataset.facet = facet;
       section.innerHTML = `<div class="facet-label">${FACET_LABELS[facet]}</div>`;
       const row = document.createElement('div');
       row.className = 'facet-variations';
@@ -657,21 +778,13 @@
       container.appendChild(section);
 
       if (cached && f.options) {
-        state.facetImages[facet] = f.options.map(o => o.url);
+        const urls = f.options.map(o => o.url);
+        designer.facets[facet] = { status: urls.length ? 'ready' : 'failed', images: urls, prompt: null };
         f.options.forEach((o, i) => row.appendChild(makeVariationTile(facet, o.url, i, o.hasItems, o.id)));
-        // preselect first
         if (f.options[0]) selectVariation(facet, f.options[0].url, row.firstChild);
       } else {
-        // miss: 3 shimmer slots, then generate 3 variations
-        state.facetImages[facet] = [];
-        for (let i = 0; i < 3; i++) {
-          const slot = document.createElement('div');
-          slot.className = 'facet-tile shimmer';
-          slot.dataset.facet = facet;
-          slot.dataset.idx = i;
-          row.appendChild(slot);
-        }
-        generateFacetVariations(facet, f.prompt, row);
+        designer.facets[facet] = { status: 'loading', images: [], prompt: f.prompt };
+        generateFacetVariations(facet, section, token, signal);
       }
     });
   }
@@ -688,89 +801,91 @@
   }
 
   function selectVariation(facet, url, tile) {
-    state.chosen[facet] = url;
+    designer.chosen[facet] = url;
     const row = tile.parentElement;
     row.querySelectorAll('.facet-tile').forEach(t => t.classList.remove('selected'));
     tile.classList.add('selected');
-    // enable "Use this theme" once all three facets have a pick
-    const allChosen = FACET_ORDER.every(f => state.chosen[f]);
-    $('#theme-use').disabled = !allChosen;
+    refreshThemeCtas();
   }
 
-  async function generateFacetVariations(facet, prompt, row) {
-    const styleAnchor = state.theme.style_anchor || '';
-    const fullPrompt = `${styleAnchor}\n\n${prompt}`.trim();
-    try {
-      const res = await fetch('/api/generate-image', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt: fullPrompt, count: 3 }),
-      });
-      const d = await res.json();
-      const images = d.images || [];
-      state.facetImages[facet] = images;
-      const slots = row.querySelectorAll('.facet-tile');
-      slots.forEach((slot, i) => {
-        if (images[i]) {
-          const tile = makeVariationTile(facet, images[i], i, false);
-          row.replaceChild(tile, slot);
-        } else {
-          slot.classList.remove('shimmer');
-          slot.classList.add('facet-tile-empty');
-          slot.innerHTML = '<span>no image</span>';
-        }
-      });
-      // preselect first available
-      const firstTile = row.querySelector('.facet-tile:not(.facet-tile-empty)');
-      if (firstTile && !state.chosen[facet]) selectVariation(facet, images[0], firstTile);
-    } catch (err) {
-      row.querySelectorAll('.facet-tile').forEach(slot => {
+  // Per-facet: loading → ready | failed (failed offers its own retry).
+  async function generateFacetVariations(facet, section, token, signal) {
+    const f = designer.facets[facet];
+    const row = section.querySelector('.facet-variations');
+    f.status = 'loading';
+    section.querySelectorAll('.facet-retry').forEach(b => b.remove());
+    row.innerHTML = '';
+    for (let i = 0; i < 3; i++) {
+      const slot = document.createElement('div');
+      slot.className = 'facet-tile shimmer';
+      slot.dataset.facet = facet;
+      slot.dataset.idx = i;
+      row.appendChild(slot);
+    }
+    refreshThemeCtas();
+
+    const styleAnchor = (designer.theme && designer.theme.style_anchor) || '';
+    const d = await postJson('/api/generate-image', { prompt: `${styleAnchor}\n\n${f.prompt}`.trim(), count: 3 }, signal);
+    if (!designer.isCurrent(token)) return;
+    const images = d.images || [];
+    f.images = images;
+    f.status = images.length ? 'ready' : 'failed';
+    row.querySelectorAll('.facet-tile').forEach((slot, i) => {
+      if (images[i]) {
+        row.replaceChild(makeVariationTile(facet, images[i], i, false), slot);
+      } else {
         slot.classList.remove('shimmer');
         slot.classList.add('facet-tile-empty');
-        slot.innerHTML = '<span>failed</span>';
-      });
+        slot.innerHTML = `<span>${images.length ? 'no image' : 'failed'}</span>`;
+      }
+    });
+    if (f.status === 'failed') {
+      const retry = document.createElement('button');
+      retry.className = 'btn btn-secondary btn-sm facet-retry';
+      retry.textContent = 'Retry ' + FACET_LABELS[facet].toLowerCase();
+      retry.addEventListener('click', () => generateFacetVariations(facet, section, designer.req, themeAbort && themeAbort.signal));
+      section.appendChild(retry);
     }
+    const firstTile = row.querySelector('.facet-tile:not(.facet-tile-empty)');
+    if (firstTile && !designer.chosen[facet]) selectVariation(facet, images[0], firstTile);
+    refreshThemeCtas();
   }
 
-  // Regenerate (capped)
-  const MAX_REGENERATIONS = 3;
-  const themeRegenBtn = $('#theme-regen');
+  // Regenerate: capped per theme preference, and always bypasses the library cache.
   if (themeRegenBtn) themeRegenBtn.addEventListener('click', () => {
-    state.themeRegenCount = (state.themeRegenCount || 0) + 1;
-    if (state.themeRegenCount >= MAX_REGENERATIONS) {
-      themeRegenBtn.disabled = true;
-      themeRegenBtn.textContent = 'No more looks';
-    }
-    startThemeCreation(data.partyPlan.themePreference || (data.partyPlan.theme && data.partyPlan.theme.name) || '');
+    if (designer.regensLeft() <= 0) return;
+    designer.useRegen();
+    startThemeCreation(M.themeRequest(data.partyPlan), { fresh: true });
   });
 
   const themeBackBtn = $('#theme-back');
-  if (themeBackBtn) themeBackBtn.addEventListener('click', () => { hideScreen('theme-screen'); landingOverlay.classList.remove('hidden'); });
+  if (themeBackBtn) themeBackBtn.addEventListener('click', () => {
+    designer.cancel();
+    if (themeAbort) themeAbort.abort();
+    journey.send('BACK');
+  });
 
-  const themeUseBtn = $('#theme-use');
   if (themeUseBtn) themeUseBtn.addEventListener('click', handleThemeAccepted);
 
   async function handleThemeAccepted() {
-    // record theme on the plan
-    data.partyPlan.theme = { name: state.theme.name || '', source: 'generated', palette: state.theme.palette || [] };
+    if (!designer.canAccept() || !journey.can('ACCEPT')) return;
+    const theme = designer.theme || {};
+    data.partyPlan.theme = { name: theme.name || '', source: 'generated', palette: theme.palette || [] };
     saveData(data);
     renderPlanCard();
-    sheetThemeName.textContent = state.theme.name || '';
+    sheetThemeName.textContent = theme.name || '';
 
-    const chosenUrls = FACET_ORDER.map(f => state.chosen[f]).filter(Boolean);
+    const chosenUrls = FACET_ORDER.map(f => designer.chosen[f]).filter(Boolean);
     state.themeFacets = chosenUrls;
 
-    // Save all generated variations to the library (miss path only)
-    if (!state.cached) {
+    // Save all generated variations to the library (miss path only, once per design)
+    if (!designer.cached && !designer.saved) {
+      designer.saved = true;
       const images = [];
-      FACET_ORDER.forEach(facet => (state.facetImages[facet] || []).forEach(url => {
+      FACET_ORDER.forEach(facet => ((designer.facets[facet] || {}).images || []).forEach(url => {
         if (url && url.startsWith('data:')) images.push({ facet, dataUrl: url });
       }));
-      // fire and forget
-      fetch('/api/save-theme', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key: state.themeKey, theme: state.theme, images }),
-      }).catch(() => {});
+      if (images.length) postJson('/api/save-theme', { key: designer.key, theme, images }); // fire and forget
     }
 
     await runExtraction(chosenUrls);
@@ -781,28 +896,30 @@
   // ══════════════════════════════════════
 
   async function runExtraction(chosenUrls) {
-    const overlay = $('#extraction-overlay');
-    overlay.classList.remove('hidden');
-    try {
-      // convert data/library URLs to base64 for the vision call
-      const payloads = [];
-      for (const url of chosenUrls) {
-        const parsed = await urlToBase64(url);
-        if (parsed) payloads.push(parsed);
-      }
-      const items = await callExtractItems(payloads, []);
-      // tag each item with the chosen facet image for thumbnails
-      items.forEach(it => { it.source_url = chosenUrls[it.image_index] || chosenUrls[0]; });
-      state.extractedItems = items;
-      data.extractedItems = items;
-      saveData(data);
-      overlay.classList.add('hidden');
-      hideScreen('theme-screen');
-      renderDecideScreen(items);
-    } catch (err) {
-      overlay.classList.add('hidden');
-      alert('Extraction failed: ' + err.message);
+    if (!journey.send('ACCEPT')) return;
+    clearStageError('theme-screen');
+    const payloads = [];
+    for (const url of chosenUrls) {
+      const parsed = await urlToBase64(url);
+      if (parsed) payloads.push(parsed);
     }
+    const { items, error } = payloads.length
+      ? await callExtractItems(payloads, [])
+      : { items: [], error: 'could not read the chosen images' };
+
+    if (error || items.length === 0) {
+      journey.send('FAILED');
+      showStageError('theme-screen',
+        error ? `Couldn't spot the pieces in this look (${error}).` : 'No shoppable pieces found in these looks — try different picks or another look.',
+        error ? handleThemeAccepted : null);
+      return;
+    }
+    items.forEach(it => { it.source_url = chosenUrls[it.image_index] || chosenUrls[0]; });
+    state.extractedItems = items;
+    data.extractedItems = items;
+    saveData(data);
+    renderDecideScreen(items);
+    journey.send('EXTRACTED');
   }
 
   // fetch any URL (data: or /themes/...) and return { base64, mediaType }, downscaled
@@ -827,9 +944,11 @@
     } catch { return null; }
   }
 
+  let refreshDecideCta = () => {};
+
   function renderDecideScreen(items) {
-    showScreen('decide-screen');
     $('#decide-sub').textContent = `${items.length} pieces found`;
+    clearStageError('decide-screen');
     const container = $('#decide-sections');
     container.innerHTML = '';
     const selected = new Set();
@@ -844,7 +963,6 @@
       const idxs = grouped[bucket];
       if (!idxs || !idxs.length) return;
       const meta = BUCKET_META[bucket] || { label: bucket, icon: '', color: '#888' };
-      // sort by importance desc
       idxs.sort((a, b) => (items[b].importance || 0) - (items[a].importance || 0));
 
       const section = document.createElement('details');
@@ -868,82 +986,72 @@
         const cb = row.querySelector('input');
         cb.addEventListener('change', () => {
           if (cb.checked) selected.add(i); else selected.delete(i);
-          updateDecideCounts();
+          refreshDecideCta();
         });
         section.appendChild(row);
       });
       container.appendChild(section);
     });
 
-    function updateDecideCounts() {
+    refreshDecideCta = function () {
       container.querySelectorAll('.decide-section').forEach(sec => {
         const boxes = sec.querySelectorAll('input[type=checkbox]');
         const on = Array.from(boxes).filter(b => b.checked).length;
         const c = sec.querySelector('.decide-count');
         if (c) c.textContent = `${on} of ${boxes.length}`;
       });
-      $('#decide-shop').disabled = selected.size === 0;
-      $('#decide-shop').textContent = `Find products (${selected.size})`;
-    }
-    updateDecideCounts();
-
-    const shopBtn = $('#decide-shop');
-    shopBtn.onclick = () => {
-      const chosen = Array.from(selected).map(i => items[i]);
-      runShop(chosen);
+      const btn = $('#decide-shop');
+      if (journey.state === 'shopping') { btn.disabled = true; btn.textContent = 'Shopping for the best picks…'; return; }
+      btn.disabled = selected.size === 0;
+      btn.textContent = `Find products (${selected.size})`;
     };
+    refreshDecideCta();
+
+    $('#decide-shop').onclick = () => runShop(Array.from(selected).map(i => items[i]));
   }
 
   const decideBackBtn = $('#decide-back');
-  if (decideBackBtn) decideBackBtn.addEventListener('click', () => { hideScreen('decide-screen'); showScreen('theme-screen'); });
+  if (decideBackBtn) decideBackBtn.addEventListener('click', () => {
+    // After a reload there is no theme in memory: Back goes Home, not to an empty designer.
+    journey.send('BACK', { hasTheme: designer.status === 'ready' && !!designer.theme });
+  });
 
   // ══════════════════════════════════════
   //  SHOP → CART decision hub
   // ══════════════════════════════════════
 
   async function runShop(selectedItems) {
-    const shopBtn = $('#decide-shop');
-    shopBtn.disabled = true;
-    shopBtn.textContent = 'Shopping for the best picks…';
-    try {
-      const res = await fetch('/api/shop', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: selectedItems, plan: data.partyPlan }),
-      });
-      const d = await res.json();
-      const picks = (d.picks || []).filter(p => p.product);
-      state.cart = picks.map(p => ({
-        id: generateId(),
-        item_name: p.item_name,
-        bucket: p.bucket,
-        product: p.product,
-        quantity: p.quantity || 1,
-        pack_size: p.pack_size || null,
-        reason: p.reason || '',
-      }));
-      data.partyBucket = state.cart.slice();
-      saveData(data);
-      hideScreen('decide-screen');
-      renderCart();
-    } catch (err) {
-      alert('Shopping failed: ' + err.message);
-    } finally {
-      shopBtn.disabled = false;
-      shopBtn.textContent = 'Find products';
+    if (!journey.send('SHOP')) return;
+    clearStageError('decide-screen');
+    refreshDecideCta();
+    const d = await postJson('/api/shop', { items: selectedItems, plan: data.partyPlan });
+    const picks = (d.picks || []).filter(p => p.product);
+    if (d.error || picks.length === 0) {
+      journey.send('FAILED');
+      refreshDecideCta();
+      showStageError('decide-screen',
+        d.error ? `Couldn't find products (${d.error}).` : 'No products matched these pieces — try a different selection.',
+        d.error ? () => runShop(selectedItems) : null);
+      return;
     }
+    data.partyBucket = M.normalizeCart(picks);
+    saveData(data);
+    updateBucketUI();
+    renderCart();
+    journey.send('SHOPPED');
+    refreshDecideCta();
   }
 
   function cartSubtotal() {
-    return (state.cart || []).reduce((s, l) => s + (l.product.price || 0) * (l.quantity || 1), 0);
+    return M.subtotal(data.partyBucket);
   }
 
   function renderCart() {
-    showScreen('cart-screen');
     const list = $('#cart-list');
     list.innerHTML = '';
-    $('#cart-sub').textContent = `${(state.cart || []).length} items`;
+    $('#cart-sub').textContent = `${data.partyBucket.length} items`;
 
-    (state.cart || []).forEach(line => {
+    data.partyBucket.forEach(line => {
       const card = document.createElement('div');
       card.className = 'cart-card';
       const retailer = line.product.retailer || 'retailer';
@@ -956,7 +1064,7 @@
           <div class="cart-name">${escapeHtml(line.item_name)}</div>
           <div class="cart-title">${escapeHtml(line.product.title || '')}</div>
           <div class="cart-price-row"><span class="cart-unit">${formatCurrency(line.product.price || 0)}</span>
-            <span class="cart-line-total">${formatCurrency((line.product.price || 0) * (line.quantity || 1))}</span></div>
+            <span class="cart-line-total">${formatCurrency(M.lineTotal(line))}</span></div>
           <div class="cart-controls">
             <div class="pp-stepper cart-stepper">
               <button class="pp-step" data-act="dec">−</button>
@@ -974,62 +1082,56 @@
       list.appendChild(card);
     });
 
+    $('#cart-checkout').disabled = data.partyBucket.length === 0;
     renderBudgetTracker();
   }
 
+  // Single write path for cart mutations: persist, then refresh every view of it.
+  function commitCart() {
+    saveData(data);
+    updateBucketUI();
+    renderCart();
+  }
+
   function changeCartQty(id, delta) {
-    const line = (state.cart || []).find(l => l.id === id);
+    const line = data.partyBucket.find(l => l.id === id);
     if (!line) return;
     line.quantity = Math.max(1, (line.quantity || 1) + delta);
-    data.partyBucket = state.cart.slice();
-    saveData(data);
-    renderCart();
+    commitCart();
   }
 
   function removeCartLine(id) {
-    state.cart = (state.cart || []).filter(l => l.id !== id);
-    data.partyBucket = state.cart.slice();
-    saveData(data);
-    updateBucketUI();
-    renderCart();
+    data.partyBucket = data.partyBucket.filter(l => l.id !== id);
+    commitCart();
   }
 
   function renderBudgetTracker() {
-    const budget = data.partyPlan.budget;
-    const subtotal = cartSubtotal();
+    const b = M.budgetStatus(data.partyBucket, data.partyPlan.budget);
     const fill = $('#budget-fill');
     const label = $('#budget-label');
-    if (!budget) {
+    if (b.state === 'no_budget') {
       fill.style.width = '0%';
-      label.textContent = `Subtotal: ${formatCurrency(subtotal)}`;
+      label.textContent = `Subtotal: ${formatCurrency(b.subtotal)}`;
       $('#budget-tracker').classList.remove('over');
       return;
     }
-    const pct = Math.min(100, (subtotal / budget) * 100);
-    fill.style.width = pct + '%';
-    const over = subtotal > budget;
-    $('#budget-tracker').classList.toggle('over', over);
-    label.textContent = over
-      ? `${formatCurrency(subtotal)} — ${formatCurrency(subtotal - budget)} over your ${formatCurrency(budget)} budget`
-      : `You've used ${formatCurrency(subtotal)} of ${formatCurrency(budget)}`;
+    fill.style.width = Math.min(100, (b.subtotal / b.budget) * 100) + '%';
+    $('#budget-tracker').classList.toggle('over', b.state === 'over');
+    label.textContent = b.state === 'over'
+      ? `${formatCurrency(b.subtotal)} — ${formatCurrency(b.delta)} over your ${formatCurrency(b.budget)} budget`
+      : `You've used ${formatCurrency(b.subtotal)} of ${formatCurrency(b.budget)}`;
   }
 
   const cartBackBtn = $('#cart-back');
-  if (cartBackBtn) cartBackBtn.addEventListener('click', () => { hideScreen('cart-screen'); showScreen('decide-screen'); });
+  if (cartBackBtn) cartBackBtn.addEventListener('click', () => journey.send('BACK', { hasItems: state.extractedItems.length > 0 }));
 
   const cartCheckoutBtn = $('#cart-checkout');
   if (cartCheckoutBtn) cartCheckoutBtn.addEventListener('click', () => {
-    // hand the consolidated cart to the existing checkout flow
-    data.partyBucket = (state.cart || []).map(l => ({
-      id: l.id, name: l.product.title || l.item_name, price: l.product.price || 0,
-      store: l.product.retailer || 'Google Shopping', bucket: l.bucket, quantity: l.quantity || 1,
-      url: l.product.link || '', image: l.product.thumbnail || '',
-    }));
-    saveData(data);
-    updateBucketUI();
-    hideScreen('cart-screen');
-    setSheetState('full');
-    bucketCheckoutBtn.click();
+    if (!data.partyBucket.length) return;
+    // Checkout lives in the bottom sheet over Home; the cart stays canonical and
+    // is adapted to the checkout API shape at the boundary (M.toCheckoutItems).
+    journey.send('CHECKOUT');
+    openCheckout();
   });
 
   // ══════════════════════════════════════
@@ -1248,16 +1350,12 @@
 
   function addProductsToBucket(selectedProducts) {
     for (const [, { product, bucket }] of selectedProducts) {
-      data.partyBucket.push({
-        id: generateId(),
-        name: product.name,
-        price: product.price || 0,
-        store: product.retailer || 'Google Shopping',
+      data.partyBucket.push(M.normalizeLine({
+        item_name: product.name,
         bucket: bucket || 'accent_decor',
         quantity: 1,
-        url: product.url || '',
-        image: product.image || '',
-      });
+        product: { title: product.name, retailer: product.retailer || 'Google Shopping', link: product.url || '', price: product.price || 0, thumbnail: product.image || '' },
+      }));
     }
     saveData(data);
     updateBucketUI();
@@ -1317,6 +1415,8 @@
   });
 
   async function handleChatSend() {
+    // One agent turn at a time: while thinking, keep the draft and ignore sends.
+    if (agent.state !== 'idle') return;
     const text = chatInput.value.trim();
     if (!text && pendingChatImages.length === 0) return;
 
@@ -1336,7 +1436,11 @@
       addChatMessage('user', `Uploaded ${images.length} image${images.length > 1 ? 's' : ''} for analysis.`);
       addChatMessage('assistant', 'Analyzing your images...');
 
-      const items = await callExtractItems(images, []);
+      const { items, error } = await callExtractItems(images, []);
+      if (error) {
+        addChatMessage('assistant', `Sorry — I couldn't analyze those images (${error}).`);
+        return;
+      }
       state.extractedItems = items;
       data.extractedItems = items;
       saveData(data);
@@ -1351,147 +1455,124 @@
     }
 
     if (text) addChatMessage('user', text);
-    state.apiMessages.push({ role: 'user', content: text });
-    await sendToLLM();
+    await runAgent(text);
   }
 
-  async function sendToLLM() {
+  // ── Agent loop: idle → thinking → (tools → thinking)* → idle ──
+  // Bounded to M.MAX_AGENT_TURNS model calls; messages are appended through
+  // M.pushMessage so roles always alternate, even after an error.
+  function setAgentBusy(busy) {
+    if (chatSendBtn) chatSendBtn.disabled = busy;
+    if (homeChatSend) homeChatSend.disabled = busy;
+    chatDrawer.classList.toggle('agent-busy', busy);
+  }
 
-    const typingEl = document.createElement('div');
-    typingEl.className = 'chat-message assistant';
-    typingEl.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-    chatMessages.appendChild(typingEl);
+  function showTyping() {
+    const el = document.createElement('div');
+    el.className = 'chat-message assistant';
+    el.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
+    chatMessages.appendChild(el);
     scrollChatToBottom();
+    return el;
+  }
 
-    const result = await callClaude(state.apiMessages);
-    typingEl.remove();
+  async function runAgent(userText) {
+    if (!agent.send('SEND')) return false;
+    setAgentBusy(true);
+    M.pushMessage(state.apiMessages, 'user', userText);
+    try {
+      for (let turn = 0; turn < M.MAX_AGENT_TURNS; turn++) {
+        const typingEl = showTyping();
+        const result = await callClaude(state.apiMessages);
+        typingEl.remove();
 
-    if (!result || result.error) {
-      addChatMessage('assistant', 'Sorry, something went wrong. ' + (result?.error || ''));
-      return;
-    }
+        if (!result || result.error || !Array.isArray(result.content)) {
+          addChatMessage('assistant', 'Sorry, something went wrong. ' + ((result && result.error) || ''));
+          agent.send('ERROR');
+          return false;
+        }
 
-    const content = result.content || [];
-    state.apiMessages.push({ role: 'assistant', content });
+        const content = result.content;
+        M.pushMessage(state.apiMessages, 'assistant', content);
+        const texts = content.filter(b => b.type === 'text').map(b => b.text);
+        if (texts.length > 0) addChatMessage('assistant', texts.join('\n'));
 
-    const texts = content.filter(b => b.type === 'text').map(b => b.text);
-    if (texts.length > 0) {
-      addChatMessage('assistant', texts.join('\n'));
-    }
+        const toolUses = content.filter(b => b.type === 'tool_use');
+        if (toolUses.length === 0) { agent.send('DONE'); return true; }
 
-    // Handle tool calls
-    const toolUses = content.filter(b => b.type === 'tool_use');
-    if (toolUses.length > 0) {
-      const toolResults = [];
-      for (const tool of toolUses) {
-        const result = await processToolCall(tool);
-        toolResults.push(result);
+        const toolResults = [];
+        for (const tool of toolUses) toolResults.push(await processToolCall(tool));
+        M.pushMessage(state.apiMessages, 'user', toolResults);
+        saveData(data);
       }
-      state.apiMessages.push({ role: 'user', content: toolResults });
-      saveData(data);
-
-      // Let Claude respond to tool results
-      await sendToLLMContinue();
+      // Turn budget spent: stop rather than loop (and bill) indefinitely.
+      addChatMessage('assistant', "I've made those updates — tell me what you'd like next.");
+      agent.send('DONE');
+      return true;
+    } finally {
+      if (agent.state !== 'idle') agent.send('ERROR');
+      setAgentBusy(false);
     }
   }
 
-  async function sendToLLMContinue() {
-    const typingEl = document.createElement('div');
-    typingEl.className = 'chat-message assistant';
-    typingEl.innerHTML = '<div class="typing-dots"><span></span><span></span><span></span></div>';
-    chatMessages.appendChild(typingEl);
-    scrollChatToBottom();
-
-    const result = await callClaude(state.apiMessages);
-    typingEl.remove();
-
-    if (!result || result.error || !result.content) return;
-
-    state.apiMessages.push({ role: 'assistant', content: result.content });
-
-    const texts = result.content.filter(b => b.type === 'text').map(b => b.text);
-    if (texts.length > 0) {
-      addChatMessage('assistant', texts.join('\n'));
-    }
-
-    const toolUses = result.content.filter(b => b.type === 'tool_use');
-    if (toolUses.length > 0) {
-      const toolResults = [];
-      for (const tool of toolUses) {
-        const r = await processToolCall(tool);
-        toolResults.push(r);
-      }
-      state.apiMessages.push({ role: 'user', content: toolResults });
-      saveData(data);
-      await sendToLLMContinue();
-    }
+  // Each tool result tells the agent what changed AND where the app now is,
+  // so its next turn is grounded in real state rather than its own guess.
+  function toolResult(tool, text, isError) {
+    const r = { type: 'tool_result', tool_use_id: tool.id, content: `${text}\n[stage: ${journey.state}]` };
+    if (isError) r.is_error = true;
+    return r;
   }
 
   async function processToolCall(tool) {
+    const inp = tool.input || {};
+
     if (tool.name === 'update_party_plan') {
-      const inp = tool.input || {};
-      applyPlanUpdate(inp);
-      const recorded = [];
-      if (inp.eventType != null) recorded.push(`type=${inp.eventType}`);
-      if (inp.budget != null) recorded.push(`budget=$${inp.budget}`);
-      if (inp.guestCount != null) recorded.push(`people=${inp.guestCount}`);
-      if (inp.setting != null) recorded.push(`setting=${inp.setting}`);
-      if (inp.themePreference != null) recorded.push(`theme=${inp.themePreference}`);
-      const plan = data.partyPlan;
-      const ready = !!plan.eventType && !!(plan.themePreference || plan.theme);
-      return {
-        type: 'tool_result',
-        tool_use_id: tool.id,
-        content: `Cards updated (${recorded.join(', ') || 'no changes'}).` +
-          (ready ? ' Party type and theme are set — you may call create_theme, or invite the user to tap "Design my theme".' : ' Still missing party type or theme.'),
-      };
+      const { changed, invalidatedTheme } = applyPlanUpdate(inp);
+      const recorded = changed.map(k => {
+        const v = data.partyPlan[k];
+        return { eventType: `type=${v}`, budget: `budget=$${v}`, guestCount: `people=${v}`, setting: `setting=${v}`, themePreference: `theme=${v}` }[k];
+      });
+      const { ready, missing } = M.planReadiness(data.partyPlan);
+      return toolResult(tool,
+        `Cards updated (${recorded.join(', ') || 'no changes'}).` +
+        (invalidatedTheme ? ' The previously designed theme no longer matches and was cleared.' : '') +
+        (ready ? ' Party type and theme are set — you may call create_theme, or invite the user to tap "Design my theme".' : ` Still missing: ${missing.join(', ')}.`));
     }
 
     if (tool.name === 'create_theme') {
-      const inp = tool.input || {};
-      const pref = inp.theme_preference || data.partyPlan.themePreference || (data.partyPlan.theme && data.partyPlan.theme.name) || '';
+      const pref = inp.theme_preference || M.themeRequest(data.partyPlan);
+      if (!journey.can('DESIGN')) {
+        return toolResult(tool, `Can't open the theme designer right now — the user is ${M.STAGE_DESCRIPTION[journey.state]}. Try again once that finishes.`, true);
+      }
       closeChatDrawer();
       startThemeCreation(pref);
-      return {
-        type: 'tool_result',
-        tool_use_id: tool.id,
-        content: `Opened the theme designer for "${pref}". The user is choosing their favorite look per section.`,
-      };
+      return toolResult(tool, `Opened the theme designer for "${pref}". The user is choosing their favorite look per section.`);
     }
 
     if (tool.name === 'update_party_bucket') {
-      const inp = tool.input || {};
       const results = [];
       for (const action of (inp.actions || [])) {
-        if (action.action === 'add') {
-          data.partyBucket.push({
-            id: generateId(),
-            name: action.item_name,
-            price: action.price || 0,
-            store: action.store || 'Amazon',
-            quantity: 1,
-          });
+        if (action.action === 'add' && action.item_name) {
+          data.partyBucket.push(M.normalizeLine({
+            item_name: action.item_name,
+            product: { title: action.item_name, price: action.price || 0, retailer: action.store || 'Amazon' },
+          }));
           results.push(`Added "${action.item_name}"`);
         } else if (action.action === 'remove') {
-          const idx = data.partyBucket.findIndex(b =>
-            b.name.toLowerCase().includes(action.item_name.toLowerCase())
-          );
+          const idx = M.findLineByName(data.partyBucket, action.item_name);
           if (idx !== -1) {
-            results.push(`Removed "${data.partyBucket[idx].name}"`);
+            results.push(`Removed "${data.partyBucket[idx].item_name}"`);
             data.partyBucket.splice(idx, 1);
+          } else {
+            results.push(`No cart line matched "${action.item_name}"`);
           }
         }
       }
-      saveData(data);
-      updateBucketUI();
-      return {
-        type: 'tool_result',
-        tool_use_id: tool.id,
-        content: results.join('. ') + `. Bucket: ${data.partyBucket.length} items, ${formatCurrency(getBucketTotal())}.`,
-      };
+      commitCart();
+      return toolResult(tool, results.join('. ') + `. Cart: ${data.partyBucket.length} lines, ${formatCurrency(getBucketTotal())}.`);
     }
 
-    return { type: 'tool_result', tool_use_id: tool.id, content: 'Unknown tool.' };
+    return toolResult(tool, `Unknown tool "${tool.name}".`, true);
   }
 
   // Chat image uploads
@@ -1538,7 +1619,7 @@
   // ══════════════════════════════════════
 
   function getBucketTotal() {
-    return data.partyBucket.reduce((s, item) => s + (item.price * (item.quantity || 1)), 0);
+    return M.subtotal(data.partyBucket);
   }
 
   function updateBucketUI() {
@@ -1627,15 +1708,23 @@
     return stripeInstance;
   }
 
-  bucketCheckoutBtn.addEventListener('click', async () => {
+  // Sheet mode: browse → checkout → results → (Done) browse.
+  async function openCheckout() {
     if (data.partyBucket.length === 0) return;
-    sheetCheckout.classList.remove('hidden');
-    sheetItemsList.style.display = 'none';
-    sheetProducts.style.display = 'none';
+    setSheetMode('checkout');
     setSheetState('full');
+    resetPlaceOrderBtn();
     await renderCheckoutSummary();
     initStripeElements();
-  });
+  }
+
+  function resetPlaceOrderBtn() {
+    const btn = $('#checkout-place-order-btn');
+    btn.disabled = false;
+    btn.textContent = 'Place Order';
+  }
+
+  bucketCheckoutBtn.addEventListener('click', openCheckout);
 
   function initStripeElements() {
     const stripe = getStripe();
@@ -1657,16 +1746,8 @@
 
     summaryEl.innerHTML = '<div style="text-align:center;padding:10px;"><div class="spinner" style="margin:0 auto;"></div></div>';
 
-    try {
-      const res = await fetch('/api/checkout/plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: data.partyBucket }),
-      });
-      checkoutPlan = await res.json();
-    } catch {
-      checkoutPlan = { retailers: [], unsupported: [] };
-    }
+    const plan = await postJson('/api/checkout/plan', { items: M.toCheckoutItems(data.partyBucket) });
+    checkoutPlan = plan.error ? { retailers: [], unsupported: [] } : plan;
 
     const total = getBucketTotal();
 
@@ -1718,8 +1799,7 @@
     };
 
     if (!buyerInfo.email || !buyerInfo.address.street) {
-      btn.disabled = false;
-      btn.textContent = 'Place Order';
+      resetPlaceOrderBtn();
       alert('Please fill in your email and shipping address.');
       return;
     }
@@ -1731,8 +1811,7 @@
         const { token, error } = await stripe.createToken(stripeCardElement);
         if (error) {
           $('#stripe-card-errors').textContent = error.message;
-          btn.disabled = false;
-          btn.textContent = 'Place Order';
+          resetPlaceOrderBtn();
           return;
         }
         stripeToken = token.id;
@@ -1794,16 +1873,17 @@
     html += `<p style="margin-top:8px;font-size:0.85rem;color:var(--text-light)">${data.partyBucket.length} items — ${formatCurrency(getBucketTotal())}</p>`;
     html += '<button class="btn btn-primary" id="checkout-done-btn" style="margin-top:16px">Done</button></div>';
 
-    sheetCheckout.innerHTML = html;
+    setSheetMode('results');
+    checkoutResultsEl.innerHTML = html;
     $('#checkout-done-btn').addEventListener('click', () => {
       data.partyBucket = [];
       saveData(data);
       updateBucketUI();
-      sheetCheckout.classList.add('hidden');
-      sheetCheckout.innerHTML = '';
-      sheetItemsList.style.display = '';
-      sheetProducts.style.display = '';
+      renderCart();
+      setSheetMode('browse');
       setSheetState('collapsed');
+      resetPlaceOrderBtn();
+      if (journey.state !== 'home') journey.send('HOME');
     });
   }
 
@@ -1858,12 +1938,11 @@
       sheetThemeName.textContent = data.partyPlan.theme.name || '';
     }
 
-    // Restore cart (if a shopping session was in progress)
-    if (data.partyBucket && data.partyBucket.length > 0) {
-      state.cart = data.partyBucket.filter(l => l.product).map(l => ({ ...l }));
-    }
+    // Rebuild the persisted stages' screens so a resumed journey (and Back) has content.
+    if (state.extractedItems.length) renderDecideScreen(state.extractedItems);
+    renderCart();
 
-    // Restore chat
+    // Restore chat transcript (the agent's API context was rebuilt from it in `state`)
     if (data.chatHistory && data.chatHistory.length > 0) {
       chatMessages.innerHTML = '';
       data.chatHistory.forEach(msg => {
@@ -1873,13 +1952,14 @@
         chatMessages.appendChild(el);
       });
     }
+
+    renderStage(journey.state);
   }
 
   window.app = {
     removeBucketItem(id) {
       data.partyBucket = data.partyBucket.filter(b => b.id !== id);
-      saveData(data);
-      updateBucketUI();
+      commitCart();
     },
     changeQuantity(id, delta) {
       const item = data.partyBucket.find(b => b.id === id);
@@ -1887,9 +1967,17 @@
       const newQty = (item.quantity || 1) + delta;
       if (newQty < 1) { this.removeBucketItem(id); return; }
       item.quantity = newQty;
-      saveData(data);
-      updateBucketUI();
+      commitCart();
     },
+  };
+
+  // Read-only debugging/automation handle (DX + AX): what stage, what's legal next,
+  // and the recent transition log. Add ?debug to the URL to log every transition.
+  window.partyplanner = {
+    snapshot,
+    describe: describeAppState,
+    get history() { return journey.history.slice(); },
+    machines: M,
   };
 
   init();
