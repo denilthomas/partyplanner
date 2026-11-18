@@ -378,6 +378,8 @@
     const browsing = mode === 'browse';
     sheetItemsList.style.display = browsing ? '' : 'none';
     sheetProducts.style.display = browsing ? '' : 'none';
+    planCard.style.display = browsing ? '' : 'none'; // checkout leads with the order
+    sheetBody.scrollTop = 0;
     sheetCheckout.classList.toggle('hidden', browsing);
     sheetCheckout.querySelectorAll(':scope > :not(#checkout-results)').forEach((el) => { el.style.display = mode === 'checkout' ? '' : 'none'; });
     checkoutResultsEl.classList.toggle('hidden', mode !== 'results');
@@ -641,6 +643,8 @@
     runAgent(text);
   }
   if (homeChatSend) homeChatSend.addEventListener('click', sendHomeChat);
+  const homeChatHistory = $('#home-chat-history');
+  if (homeChatHistory) homeChatHistory.addEventListener('click', () => openChatDrawer());
   if (homeChatInput) homeChatInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); sendHomeChat(); } });
 
   // ══════════════════════════════════════
@@ -663,8 +667,19 @@
     bottomSheet.classList.toggle('sheet-offstage', stage !== 'home');
     $('#extraction-overlay').classList.toggle('hidden', stage !== 'extracting');
     document.body.dataset.stage = stage; // hook for CSS, tests and debugging
+    placeChatButton();
     refreshThemeCtas();
   }
+
+  // On full-screen steps the floating chat button rides just above that
+  // screen's footer so it never covers the CTAs or the budget tracker.
+  function placeChatButton() {
+    const surface = $('#' + M.STAGE_SURFACE[journey.state]);
+    const footer = surface && surface.querySelector('.fs-footer');
+    const h = footer ? footer.getBoundingClientRect().height : 0;
+    document.documentElement.style.setProperty('--fab-bottom', h + 'px');
+  }
+  window.addEventListener('resize', placeChatButton);
 
   journey.subscribe((stage, t) => {
     data.stage = stage;
@@ -1625,6 +1640,7 @@
   function updateBucketUI() {
     const count = data.partyBucket.length;
     bucketCountBadge.textContent = count;
+    sheetItemCount.textContent = `${count} item${count === 1 ? '' : 's'}`;
     bucketTotalPrice.textContent = formatCurrency(getBucketTotal());
     bucketCheckoutBtn.disabled = count === 0;
     bucketCheckoutBtn.textContent = count > 0 ? `Checkout (${formatCurrency(getBucketTotal())})` : 'Checkout';

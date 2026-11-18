@@ -3110,3 +3110,47 @@ form {
 /* Journey: the app title belongs to Home; on full-screen steps it collided with
    the step's own header (e.g. "PartyPlanner" over "Boho Bloom"). Icons stay. */
 body[data-stage]:not([data-stage="home"]) .top-bar-title { visibility: hidden; }
+
+/* ── Layout fixes from the end-to-end screenshot review ── */
+
+/* Home: an opaque top bar (the old dark gradient was made for a photo canvas),
+   and content that starts below it instead of being centred under it. */
+body[data-stage="home"] .top-bar {
+  background: var(--bg);
+  box-shadow: 0 1px 0 var(--border);
+}
+body[data-stage="home"] .top-bar-title { color: var(--text); text-shadow: none; }
+.landing-overlay {
+  align-items: flex-start;
+  padding-top: calc(var(--top-bar-h) + var(--safe-top) + 8px);
+}
+.home-content { padding-bottom: calc(var(--sheet-peek) + 24px); }
+
+/* Home: the chat lane is pinned above the sheet peek, so describing the party
+   is always one tap away; it carries the history button, replacing the FAB. */
+.home-chat {
+  position: sticky;
+  bottom: calc(var(--sheet-peek) + 12px);
+  z-index: 2;
+  margin-top: 16px;
+  box-shadow: var(--shadow-lg);
+}
+.home-chat-history {
+  width: 36px; height: 36px; flex-shrink: 0; margin-left: -10px;
+  border: none; border-radius: 50%; background: transparent;
+  color: var(--text-light); display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+body[data-stage="home"] .chat-open-btn { display: none; }
+
+/* Full-screen steps: the chat button floats just above the footer. */
+body[data-stage]:not([data-stage="home"]) .chat-open-btn {
+  bottom: calc(var(--fab-bottom, 72px) + 12px + var(--safe-bottom));
+}
+.fs-body { padding-bottom: 76px; }
+
+/* The top bar's white-on-dark-gradient styling was built for the old photo
+   canvas. Every current stage has a light surface, so: no gradient, dark icons. */
+body[data-stage] .top-bar { background: transparent; }
+body[data-stage="home"] .top-bar { background: var(--bg); }
+body[data-stage] .top-bar-icon-btn,
+body[data-stage] .bucket-badge { color: var(--text); background: rgba(0, 0, 0, 0.04); }
