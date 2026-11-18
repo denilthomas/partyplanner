@@ -2966,8 +2966,6 @@ form {
 .fs-footer .btn { flex: 1; }
 
 /* Theme screen */
-.theme-palette { display: flex; gap: 8px; margin-bottom: 16px; }
-.theme-palette .swatch { width: 28px; height: 28px; border-radius: 6px; border: 1px solid rgba(0,0,0,0.08); }
 
 .facet-section { margin-bottom: 20px; }
 .facet-label { font-size: 0.9rem; font-weight: 700; color: var(--text); margin-bottom: 8px; }

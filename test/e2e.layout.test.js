@@ -144,3 +144,18 @@ test('top bar icons are legible (dark on light) on every stage', async () => {
   assert.equal(await page.$eval('.top-bar', (e) => getComputedStyle(e).backgroundImage), 'none', 'no dark gradient over step headers');
   await page.close();
 });
+
+test('theme screen goes straight from title to Backdrop (no palette swatches); palette still saved', async () => {
+  const { page } = await h.openApp(browser, server.url);
+  await h.fillPlan(page);
+  await h.tap(page, '#design-theme-btn');
+  await h.waitFor(page, () => !document.querySelector('#theme-use').disabled);
+  assert.equal(await page.$('.swatch, #theme-palette'), null);
+  const first = await page.$eval('#theme-screen .fs-body', (b) => b.querySelector('.facet-sections .facet-label').textContent);
+  assert.equal(first, 'Backdrop');
+  await h.tap(page, '#theme-use');
+  await h.waitFor(page, () => document.body.dataset.stage === 'decide');
+  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('partyplanner')).partyPlan.theme.palette);
+  assert.deepEqual(saved, h.FIXTURES.theme.theme.palette);
+  await page.close();
+});

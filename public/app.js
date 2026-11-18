@@ -764,7 +764,6 @@
     clearStageError('theme-screen');
     $('#theme-title').textContent = 'Designing your theme…';
     $('#theme-sub').textContent = '';
-    $('#theme-palette').innerHTML = '';
     $('#facet-sections').innerHTML = '<div class="theme-loading"><div class="spinner"></div><span>Designing…</span></div>';
     refreshThemeCtas();
 
@@ -785,15 +784,10 @@
       designer.status = 'ready';
       $('#theme-title').textContent = designer.theme.name || pref || 'Your theme';
       $('#theme-sub').textContent = designer.cached ? 'From your library' : 'Freshly designed';
-      renderPalette(designer.theme.palette || []);
       renderFacetChooser(d.facets || [], designer.cached, token, signal);
       refreshThemeCtas();
     });
     return true;
-  }
-
-  function renderPalette(palette) {
-    $('#theme-palette').innerHTML = (palette || []).map(c => `<span class="swatch" style="background:${escapeHtml(c)}"></span>`).join('');
   }
 
   function renderFacetChooser(facets, cached, token, signal) {
