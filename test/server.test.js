@@ -10,7 +10,9 @@ const post = (path, body) => fetch(server.url + path, { method: 'POST', headers:
 
 test('health reports configured services without leaking keys', async () => {
   const d = await (await fetch(server.url + '/api/health')).json();
-  assert.deepEqual(d, { ok: true, services: { anthropic: false, gemini: false, serper: false } });
+  assert.deepEqual(d.services, { anthropic: false, gemini: false, serper: false });
+  assert.equal(JSON.stringify(d).includes('sk-'), false);
+  assert.equal(d.models.claude, 'claude-sonnet-4-6');
 });
 
 test('static app + machines are served', async () => {

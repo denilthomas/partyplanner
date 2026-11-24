@@ -1,5 +1,4 @@
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+const { generateContent, textOf } = require('./gemini-client');
 
 /**
  * Analyze a room/venue photo and return anchor points suitable for party decoration.
@@ -42,20 +41,10 @@ Return a JSON array of anchor point objects. Return between 3 and 8 anchor point
       },
     };
 
-    const response = await fetch(GEMINI_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const { data, error } = await generateContent('vision', body, 'gemini:analyzeSpace');
+    if (error) return [];
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`[gemini] analyzeSpace API error ${response.status}: ${errText}`);
-      return [];
-    }
-
-    const data = await response.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = textOf(data);
     if (!text) {
       console.error("[gemini] analyzeSpace: no text in response");
       return [];
@@ -122,20 +111,10 @@ Return a JSON array of item objects, ordered by "importance" descending.`;
       },
     };
 
-    const response = await fetch(GEMINI_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const { data, error } = await generateContent('vision', body, 'gemini:extractItems');
+    if (error) return [];
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`[gemini] extractItems API error ${response.status}: ${errText}`);
-      return [];
-    }
-
-    const data = await response.json();
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    const text = textOf(data);
     if (!text) {
       console.error("[gemini] extractItems: no text in response");
       return [];

@@ -10,13 +10,18 @@
   },
   "dependencies": {
     "@omnixhq/ucp-client": "^3.0.0",
-    "express": "^4.21.0",
-    "puppeteer": "^24.41.0"
+    "express": "^4.21.0"
   },
   "keywords": [
     "party",
     "planner",
     "events"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "puppeteer": "^24.41.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }

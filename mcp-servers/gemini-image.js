@@ -1,9 +1,6 @@
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const { generateContent, imageOf, modelsFor } = require("./gemini-client");
 
-// Gemini image-generation model. Kept in one place so it can be swapped if the
-// key needs a different image model (a 404/permission error means swap this).
-const IMAGE_MODEL = "gemini-2.5-flash-image";
-const IMAGE_URL = `https://generativelanguage.googleapis.com/v1beta/models/${IMAGE_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+// Image model selection (with env override + fallback) lives in gemini-client.js.
 
 /**
  * Generate ONE image from a text prompt using Gemini's image model.
@@ -12,43 +9,17 @@ const IMAGE_URL = `https://generativelanguage.googleapis.com/v1beta/models/${IMA
  * @returns {Promise<string|null>} a `data:<mime>;base64,<data>` URL, or null on failure.
  */
 async function generateImage(prompt) {
-  if (!GEMINI_API_KEY) {
-    console.error("[gemini-image] GEMINI_API_KEY not set");
-    return null;
-  }
-  try {
-    const body = {
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: {
-        responseModalities: ["TEXT", "IMAGE"],
-      },
-    };
-
-    const response = await fetch(IMAGE_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error(`[gemini-image] API error ${response.status}: ${errText}`);
-      return null;
-    }
-
-    const data = await response.json();
-    const parts = data?.candidates?.[0]?.content?.parts || [];
-    const imgPart = parts.find((p) => p.inlineData && p.inlineData.data);
-    if (!imgPart) {
-      console.error("[gemini-image] no image in response");
-      return null;
-    }
-    const mime = imgPart.inlineData.mimeType || "image/png";
-    return `data:${mime};base64,${imgPart.inlineData.data}`;
-  } catch (err) {
-    console.error("[gemini-image] error:", err.message);
-    return null;
-  }
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      responseModalities: ["TEXT", "IMAGE"],
+    },
+  };
+  const { data, error } = await generateContent("image", body, "gemini-image");
+  if (error) return null;
+  const url = imageOf(data);
+  if (!url) console.error("[gemini-image] no image in response");
+  return url;
 }
 
 /**
@@ -65,4 +36,4 @@ async function generateImages(prompt, count = 1) {
   return results.filter(Boolean);
 }
 
-module.exports = { generateImage, generateImages, IMAGE_MODEL };
+module.exports = { generateImage, generateImages, imageModels: () => modelsFor("image") };

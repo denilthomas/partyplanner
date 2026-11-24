@@ -16,6 +16,14 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // ── Health: which upstreams are configured (no secrets returned) ──
 // Lets a developer — or an agent driving the app — see why a stage would fail.
+// Claude model for the chat assistant and the theme/shopper agents.
+// Server-owned: the browser can't pick a (pricier) model or a bigger budget.
+// claude-sonnet-4-6 retires no sooner than 2027-02-17; override on Render
+// with ANTHROPIC_MODEL when it's time to move.
+const AGENT_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
+const CHAT_MAX_TOKENS = 2048;
+const { modelsFor: geminiModelsFor } = require('./mcp-servers/gemini-client');
+
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true,
@@ -23,6 +31,12 @@ app.get('/api/health', (req, res) => {
       anthropic: !!ANTHROPIC_KEY,          // chat, theme + shopper agents
       gemini: !!process.env.GEMINI_API_KEY, // image generation + extraction
       serper: !!process.env.SERPER_API_KEY, // product search
+    },
+    // Which models will be tried, in order (no secrets).
+    models: {
+      claude: AGENT_MODEL,
+      geminiVision: geminiModelsFor('vision'),
+      geminiImage: geminiModelsFor('image'),
     },
   });
 });
@@ -41,7 +55,14 @@ app.post('/api/chat', async (req, res) => {
         'x-api-key': ANTHROPIC_KEY,
         'anthropic-version': '2023-06-01',
       },
-      body: JSON.stringify(req.body),
+      // Only forward what the planner needs; model and budget are server-owned.
+      body: JSON.stringify({
+        model: AGENT_MODEL,
+        max_tokens: Math.min(Number(req.body?.max_tokens) || CHAT_MAX_TOKENS, CHAT_MAX_TOKENS),
+        system: req.body?.system,
+        tools: req.body?.tools,
+        messages: req.body?.messages,
+      }),
     });
 
     const data = await response.json();
@@ -151,7 +172,6 @@ app.post('/api/checkout/complete', async (req, res) => {
 //  Generative theme + shopper agents
 // ═══════════════════════════════════════════════════════════════════
 
-const AGENT_MODEL = 'claude-sonnet-4-6';
 const FACETS = ['backdrop', 'table', 'accent'];
 
 // Call Anthropic Messages API with a forced single-tool call; return the tool input object.
