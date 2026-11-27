@@ -449,7 +449,12 @@ const BOARD_PLANNER_SYSTEM = [
   '- Cover the wall or entrance, the table and the small accents; do not repeat the same kind of item.',
   '- search_query: plain shopping words a Target/Walmart/Amazon search would match, always including the color words from the palette (e.g. "sage green and cream balloon garland arch kit", "pink gingham paper napkins").',
   '- The motif appears on at most 3 pieces; the rest are solid or simple patterns in the palette, so the board feels styled, not themed-to-death.',
-  '- Never include licensed characters, brand names, food, or custom/personalized items, and never put words like "custom" or "personalized" in a search_query.',
+  '- Never include food, or custom/personalized items, and never put words like "custom" or "personalized" in a search_query.',
+  '',
+  'LICENSED THEMES',
+  '- If the theme names a character or franchise (e.g. Paw Patrol, Bluey, Frozen, Spider-Man), build it with OFFICIAL licensed party supplies, which big stores sell: keep the franchise name in the theme name (e.g. "Paw Patrol Pup Party"), use it as the signature_motif, and use the franchise colors for the palette.',
+  '- For licensed themes, 4-6 pieces carry the franchise (plates, napkins, banner or backdrop, foil balloons, favor bags, cake topper); set licensed true on them and put the franchise name in their search_query. The other pieces are solid-color basics in the franchise colors, licensed false. The at-most-3 motif rule does not apply to licensed themes.',
+  '- Never add a character or brand the user did not ask for.',
   '- Scale to the plan: under $150 budget = 8 simple pieces; larger budgets can include richer setup pieces.',
   '- quantity: packs to buy for the guest count, assuming typical pack sizes (plates/cups/napkins come in 16-24; favor bags in 12-24). Kits, backdrops, toppers and signs: 1. If unsure, 1.',
   '- bucket: one of tabletop, wall_backdrop, accent_decor, activity_favors.',
@@ -475,6 +480,7 @@ const BOARD_TOOL = {
             shot: { type: 'string', enum: ['setup', 'detail'] },
             search_query: { type: 'string' },
             quantity: { type: 'integer', minimum: 1 },
+            licensed: { type: 'boolean', description: 'true when this piece carries the licensed character/franchise the user asked for' },
           },
           required: ['item_name', 'bucket', 'shot', 'search_query'],
         },
@@ -490,14 +496,19 @@ const BOARD_TOOL = {
 // Personalized listings ("Happy Birthday Sheppard") can't be bought as shown.
 const CUSTOM_ITEM = /\b(custom(i[sz]ed|izable)?|personali[sz]ed|personali[sz]able|your (name|text|photo)|any (name|age)|monogram(med)?|name banner|made to order)\b/i;
 
-function boardCandidate(candidates) {
-  return candidates.find((c) => c.image && c.price > 0 && !CUSTOM_ITEM.test(c.name)) || null;
+// Licensed pieces only from big stores that sell official merchandise;
+// marketplace sellers are where knock-offs live.
+const LICENSED_STORES = new Set(['Target', 'Walmart', 'Amazon']);
+
+function boardCandidate(candidates, piece = {}) {
+  return candidates.find((c) => c.image && c.price > 0 && !CUSTOM_ITEM.test(c.name)
+    && (!piece.licensed || LICENSED_STORES.has(c.retailer))) || null;
 }
 
 async function findBoardProduct(piece) {
   const q = piece.search_query || piece.item_name;
-  let c = boardCandidate(await searchProducts(q, 5));
-  if (!c) c = boardCandidate(await searchKits(q, 3));
+  let c = boardCandidate(await searchProducts(q, 5), piece);
+  if (!c) c = boardCandidate(await searchKits(q, 3), piece);
   return c;
 }
 
@@ -581,4 +592,5 @@ if (require.main === module) {
   });
 }
 
+app._board = { boardCandidate, BOARD_PLANNER_SYSTEM };
 module.exports = app;

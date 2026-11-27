@@ -111,6 +111,20 @@ test('store names are clean and personalized listings are skipped', () => {
   assert.ok(titleOverlap('Dinosaur napkins 20 pack', 'bunny paper plates') < 0.6);
 });
 
+test('licensed pieces come only from big stores; the planner is told to keep the franchise', async () => {
+  const { boardCandidate } = require('../server.js')._board;
+  const cands = [
+    { name: 'Paw Patrol plates', price: 8, retailer: 'Etsy', image: 'e' },
+    { name: 'Paw Patrol plates', price: 9, retailer: 'Target', image: 't' },
+  ];
+  assert.equal(boardCandidate(cands, { licensed: true }).retailer, 'Target');
+  assert.equal(boardCandidate(cands, { licensed: false }).retailer, 'Etsy');
+  assert.equal(boardCandidate([cands[0]], { licensed: true }), null);
+  const { BOARD_PLANNER_SYSTEM } = require('../server.js')._board;
+  assert.match(BOARD_PLANNER_SYSTEM, /OFFICIAL licensed party supplies/);
+  assert.doesNotMatch(BOARD_PLANNER_SYSTEM, /Never include licensed characters/);
+});
+
 test('planner failure is a plain JSON error', async () => {
   const before = global.fetch;
   global.fetch = async (url, init) => (String(url).startsWith('https://api.anthropic.com') ? new Response('{"error":{"message":"overloaded"}}', { status: 529 }) : before(url, init));
