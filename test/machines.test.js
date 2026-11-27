@@ -7,7 +7,7 @@ test('journey: every transition target exists and every stage has a surface', ()
     assert.ok(M.STAGE_SURFACE[name], `surface for ${name}`);
     assert.ok(M.STAGE_DESCRIPTION[name], `description for ${name}`);
     for (const [ev, target] of Object.entries(node.on || {})) {
-      const targets = typeof target === 'function' ? [target({ hasTheme: true, hasItems: true }), target({})] : [target];
+      const targets = typeof target === 'function' ? [target({ hasTheme: true, hasItems: true, via: 'board', hasBoard: true }), target({})] : [target];
       for (const t of targets) assert.ok(M.JOURNEY.states[t], `${name} --${ev}--> ${t}`);
     }
   }
@@ -16,7 +16,7 @@ test('journey: every transition target exists and every stage has a surface', ()
 test('journey: every stage is reachable from home and can get back home', () => {
   const graph = {};
   for (const [s, n] of Object.entries(M.JOURNEY.states)) {
-    graph[s] = Object.values(n.on || {}).flatMap((t) => (typeof t === 'function' ? [t({ hasTheme: true, hasItems: true }), t({})] : [t]));
+    graph[s] = Object.values(n.on || {}).flatMap((t) => (typeof t === 'function' ? [t({ hasTheme: true, hasItems: true, via: 'board', hasBoard: true }), t({})] : [t]));
   }
   const reach = (from) => { const seen = new Set([from]); const q = [from]; while (q.length) for (const n of graph[q.shift()]) if (!seen.has(n)) { seen.add(n); q.push(n); } return seen; };
   assert.deepEqual([...reach('home')].sort(), Object.keys(graph).sort());
@@ -143,4 +143,21 @@ test('designer: accept requires a pick for every facet that exists', () => {
   assert.equal(d.canAccept(), false);
   d.chosen.table = 'b';
   assert.equal(d.canAccept(), true);
+});
+
+test('journey: mood-board path and its resume rules', () => {
+  const j = M.createJourney();
+  for (const ev of ['DESIGN_BOARD', 'BOARD_READY', 'ADD_TO_CART']) assert.ok(j.send(ev), ev);
+  assert.equal(j.state, 'cart');
+  j.send('BACK', { via: 'board', hasBoard: true, hasItems: true });
+  assert.equal(j.state, 'board', 'back from a board cart returns to the board');
+  const k = M.createJourney('cart');
+  k.send('BACK', { via: 'theme', hasBoard: true, hasItems: true });
+  assert.equal(k.state, 'decide', 'AI-image path unchanged');
+  assert.equal(M.createJourney('boarding').send('ADD_TO_CART'), false, 'cannot add while still loading');
+  const board = { picks: [1] };
+  assert.equal(M.resumeStage('board', { board }), 'board');
+  assert.equal(M.resumeStage('boarding', { board }), 'board');
+  assert.equal(M.resumeStage('boarding', {}), 'home');
+  assert.equal(M.resumeStage('cart', { board, partyBucket: [] }), 'board');
 });

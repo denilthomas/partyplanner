@@ -3288,3 +3288,45 @@ body[data-stage] .bucket-badge { color: var(--text); background: rgba(0, 0, 0, 0
 .field-picker-hint { margin: 0 0 10px; font-size: 0.85rem; color: var(--text-light); }
 .field-picker .pp-chips { gap: 8px; }
 .field-picker .pp-chip { padding: 10px 14px; font-size: 0.95rem; }
+
+/* ══════════════════════════════════════
+   MOOD BOARD — real listings, Pinterest-style
+   ══════════════════════════════════════ */
+.board-intro { margin: 0 0 14px; color: var(--text-light); font-size: 0.9rem; line-height: 1.4; }
+.board-intro:empty { display: none; }
+
+/* Setup shots: full width, the big inspiration images */
+.board-setup { display: grid; gap: 12px; margin-bottom: 12px; }
+/* Details: two-column masonry like Pinterest */
+.board-details { column-count: 2; column-gap: 10px; }
+
+.board-tile {
+  position: relative; break-inside: avoid; margin-bottom: 10px;
+  background: var(--surface); border-radius: 14px; overflow: hidden;
+  box-shadow: var(--shadow);
+}
+.board-img { position: relative; display: block; background: var(--surface-2); }
+.board-img img { display: block; width: 100%; height: auto; min-height: 120px; object-fit: cover; }
+.board-hero .board-img img { aspect-ratio: 4 / 5; max-height: 62vh; }
+.board-noimg {
+  display: flex; align-items: center; justify-content: center; min-height: 160px; padding: 12px;
+  color: var(--text-light); font-size: 0.85rem; text-align: center;
+}
+.board-store {
+  position: absolute; left: 8px; bottom: 8px; padding: 4px 8px; border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92); color: var(--text); font-size: 0.75rem; font-weight: 600;
+}
+.board-caption {
+  padding: 8px 10px 10px; font-size: 0.8rem; line-height: 1.3; color: var(--text);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.board-hero .board-caption { font-size: 0.9rem; }
+.board-remove {
+  position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: none; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.9); color: var(--text); font-size: 0.8rem; cursor: pointer;
+}
+
+.board-skel { background: linear-gradient(90deg, var(--surface-2) 25%, #ece7df 50%, var(--surface-2) 75%); background-size: 200% 100%; animation: boardShimmer 1.2s infinite; box-shadow: none; }
+.board-skel-hero { height: 340px; }
+@keyframes boardShimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+.board-footer .btn-secondary { flex: 0 0 auto; padding-left: 18px; padding-right: 18px; }

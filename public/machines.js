@@ -72,12 +72,15 @@
     id: 'journey',
     initial: 'home',
     states: {
-      home:       { on: { DESIGN: 'theme', OPEN_CART: 'cart' } },
+      home:       { on: { DESIGN: 'theme', DESIGN_BOARD: 'boarding', OPEN_CART: 'cart' } },
       theme:      { on: { DESIGN: 'theme', BACK: 'home', ACCEPT: 'extracting' } },
       extracting: { on: { EXTRACTED: 'decide', FAILED: 'theme' } },
       decide:     { on: { DESIGN: 'theme', BACK: (p) => (p.hasTheme ? 'theme' : 'home'), SHOP: 'shopping', OPEN_CART: 'cart' } },
       shopping:   { on: { SHOPPED: 'cart', FAILED: 'decide' } },
-      cart:       { on: { DESIGN: 'theme', BACK: (p) => (p.hasItems ? 'decide' : 'home'), CHECKOUT: 'home', HOME: 'home' } },
+      cart:       { on: { DESIGN: 'theme', DESIGN_BOARD: 'boarding', BACK: (p) => (p.via === 'board' && p.hasBoard ? 'board' : (p.hasItems ? 'decide' : 'home')), CHECKOUT: 'home', HOME: 'home' } },
+      // Mood-board path: real product listings instead of AI images.
+      boarding:   { on: { BOARD_READY: 'board', FAILED: 'board', BACK: 'home' } },
+      board:      { on: { BACK: 'home', DESIGN_BOARD: 'boarding', ADD_TO_CART: 'cart', OPEN_CART: 'cart' } },
     },
   };
 
@@ -89,6 +92,8 @@
     decide: 'decide-screen',
     shopping: 'decide-screen',
     cart: 'cart-screen',
+    boarding: 'board-screen',
+    board: 'board-screen',
   };
 
   // Human/agent-readable description of each stage.
@@ -99,6 +104,8 @@
     decide: 'choosing which detected pieces to shop for',
     shopping: 'waiting while products are found',
     cart: 'reviewing their cart (quantities, budget, checkout)',
+    boarding: 'waiting while a mood board of real products is put together',
+    board: 'browsing a mood board of real products (each with its store and price)',
   };
 
   // Transient stages can't survive a reload (their inputs live in memory).
@@ -106,8 +113,11 @@
   function resumeStage(saved, persisted) {
     const hasItems = !!(persisted && persisted.extractedItems && persisted.extractedItems.length);
     const hasCart = !!(persisted && persisted.partyBucket && persisted.partyBucket.length);
+    const hasBoard = !!(persisted && persisted.board && persisted.board.picks && persisted.board.picks.length);
     switch (saved) {
-      case 'cart': return hasCart ? 'cart' : (hasItems ? 'decide' : 'home');
+      case 'cart': return hasCart ? 'cart' : (hasItems ? 'decide' : (hasBoard ? 'board' : 'home'));
+      case 'board':
+      case 'boarding': return hasBoard ? 'board' : 'home';
       case 'decide':
       case 'shopping': return hasItems ? 'decide' : 'home';
       default: return 'home';

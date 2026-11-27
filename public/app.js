@@ -648,7 +648,7 @@
   }
 
   if (designThemeBtn) {
-    designThemeBtn.addEventListener('click', () => startThemeCreation(M.themeRequest(data.partyPlan)));
+    designThemeBtn.addEventListener('click', () => (isBoardMode() ? startBoard(M.themeRequest(data.partyPlan)) : startThemeCreation(M.themeRequest(data.partyPlan))));
   }
 
   // Home chat-assist lane
@@ -676,7 +676,7 @@
   //                  └──────────────────────── DESIGN (from decide/cart) ────────────────┘
   //  (full table + guards in machines.js → JOURNEY)
 
-  const SURFACES = ['landing-overlay', 'theme-screen', 'decide-screen', 'cart-screen'];
+  const SURFACES = ['landing-overlay', 'theme-screen', 'decide-screen', 'cart-screen', 'board-screen'];
   const DEBUG = /[?&]debug\b/.test(location.search);
 
   function renderStage(stage) {
@@ -1065,6 +1065,7 @@
       return;
     }
     data.partyBucket = M.normalizeCart(picks);
+    data.cartVia = 'theme';
     saveData(data);
     updateBucketUI();
     renderCart();
@@ -1152,8 +1153,148 @@
       : `You've used ${formatCurrency(b.subtotal)} of ${formatCurrency(b.budget)}`;
   }
 
+  // ══════════════════════════════════════
+  //  MOOD BOARD — real product listings, Pinterest-style
+  // ══════════════════════════════════════
+  //
+  //  Opt-in while we compare paths: open the app with ?board (or ?board=0
+  //  to go back to AI images). The choice is remembered on this device.
+  //  boarding → board; each tile is a real listing with its store and price.
+
+  (function initMode() {
+    const q = new URLSearchParams(location.search);
+    if (q.has('board')) {
+      data.mode = q.get('board') === '0' ? 'images' : 'board';
+      saveData(data);
+    }
+  })();
+  function isBoardMode() { return data.mode === 'board'; }
+  if (designThemeBtn && isBoardMode()) designThemeBtn.innerHTML = 'Build my board &rarr;';
+
+  let boardReq = 0;
+  const boardAddBtn = $('#board-add');
+  const boardRefreshBtn = $('#board-refresh');
+
+  function boardPicks() {
+    const b = data.board;
+    if (!b) return [];
+    const removed = new Set(b.removed || []);
+    return (b.picks || []).filter((p, i) => p.product && !removed.has(i));
+  }
+
+  function renderBoardLoading() {
+    $('#board-title').textContent = 'Building your board…';
+    $('#board-sub').textContent = 'Finding real products that go together';
+    $('#board-intro').textContent = 'This takes about 15–30 seconds.';
+    $('#board-setup').innerHTML = '<div class="board-tile board-skel board-skel-hero"></div>';
+    $('#board-details').innerHTML = Array.from({ length: 6 }, (_, i) =>
+      `<div class="board-tile board-skel" style="height:${[180, 230, 200, 240, 190, 220][i]}px"></div>`).join('');
+    boardAddBtn.disabled = true;
+    boardRefreshBtn.disabled = true;
+  }
+
+  function boardTile(p, index, hero) {
+    const prod = p.product;
+    const tile = document.createElement('div');
+    tile.className = 'board-tile' + (hero ? ' board-hero' : '');
+    tile.innerHTML = `
+      <a class="board-img" href="${escapeHtml(prod.link || '#')}" target="_blank" rel="noopener">
+        <img src="${escapeHtml(prod.thumbnail || '')}" alt="${escapeHtml(prod.title || p.item_name)}" loading="lazy">
+        <span class="board-store">${escapeHtml(prod.retailer || 'Store')} · ${formatCurrency(prod.price || 0)}</span>
+      </a>
+      <div class="board-caption">${escapeHtml(prod.title || p.item_name)}</div>
+      <button class="board-remove" aria-label="Remove from board">✕</button>`;
+    const img = tile.querySelector('img');
+    img.addEventListener('error', () => {
+      img.replaceWith(Object.assign(document.createElement('div'), { className: 'board-noimg', textContent: p.item_name }));
+    });
+    tile.querySelector('.board-remove').addEventListener('click', () => {
+      data.board.removed = [...(data.board.removed || []), index];
+      saveData(data);
+      renderBoard();
+    });
+    return tile;
+  }
+
+  function renderBoard() {
+    const b = data.board;
+    if (!b) return;
+    clearStageError('board-screen');
+    const picks = b.picks || [];
+    const removed = new Set(b.removed || []);
+    const visible = picks.map((p, i) => ({ p, i })).filter(({ p, i }) => p.product && !removed.has(i));
+    const stores = [...new Set(visible.map(({ p }) => (p.product.retailer || '').replace(/\.com$/i, '')).filter(Boolean))];
+    $('#board-title').textContent = (b.theme && b.theme.name) || 'Your mood board';
+    $('#board-sub').textContent = `${visible.length} real products${stores.length ? ' · ' + stores.slice(0, 3).join(', ') : ''}`;
+    $('#board-intro').textContent = (b.theme && b.theme.description) || '';
+
+    const setup = $('#board-setup');
+    const details = $('#board-details');
+    setup.innerHTML = '';
+    details.innerHTML = '';
+    visible.forEach(({ p, i }) => {
+      if (p.shot === 'setup') setup.appendChild(boardTile(p, i, true));
+      else details.appendChild(boardTile(p, i, false));
+    });
+
+    const total = M.subtotal(M.normalizeCart(visible.map(({ p }) => p)));
+    boardAddBtn.disabled = visible.length === 0;
+    boardAddBtn.textContent = visible.length ? `Add all to cart · ${formatCurrency(total)}` : 'Add all to cart';
+    boardRefreshBtn.disabled = false;
+  }
+
+  // Returns false if the journey can't start a board right now.
+  function startBoard(pref) {
+    if (!journey.send('DESIGN_BOARD')) return false;
+    const token = ++boardReq;
+    clearStageError('board-screen');
+    renderBoardLoading();
+    postJson('/api/moodboard', { plan: data.partyPlan, theme_preference: pref }).then((d) => {
+      if (token !== boardReq) return; // superseded
+      const picks = (d.picks || []).filter((p) => p.product);
+      if (d.error || picks.length === 0) {
+        journey.send('FAILED');
+        $('#board-title').textContent = 'Your mood board';
+        $('#board-sub').textContent = '';
+        $('#board-intro').textContent = '';
+        $('#board-setup').innerHTML = '';
+        $('#board-details').innerHTML = '';
+        boardRefreshBtn.disabled = false;
+        showStageError('board-screen',
+          d.error ? `Couldn't build a board (${d.error}).` : 'No matching products found — try a different theme.',
+          () => startBoard(pref));
+        return;
+      }
+      data.board = { theme: d.theme || {}, picks, removed: [], budget: d.budget || null };
+      if (data.board.theme.name) data.partyPlan.theme = { name: data.board.theme.name, source: 'board', palette: data.board.theme.palette || [] };
+      saveData(data);
+      renderPlanCard();
+      renderBoard();
+      journey.send('BOARD_READY');
+    });
+    return true;
+  }
+
+  if (boardAddBtn) boardAddBtn.addEventListener('click', () => {
+    const picks = boardPicks();
+    if (!picks.length || !journey.can('ADD_TO_CART')) return;
+    data.partyBucket = M.normalizeCart(picks);
+    data.cartVia = 'board';
+    saveData(data);
+    updateBucketUI();
+    renderCart();
+    journey.send('ADD_TO_CART');
+  });
+  if (boardRefreshBtn) boardRefreshBtn.addEventListener('click', () => startBoard(M.themeRequest(data.partyPlan)));
+  const boardBackBtn = $('#board-back');
+  if (boardBackBtn) boardBackBtn.addEventListener('click', () => { boardReq++; journey.send('BACK'); });
+
   const cartBackBtn = $('#cart-back');
-  if (cartBackBtn) cartBackBtn.addEventListener('click', () => journey.send('BACK', { hasItems: state.extractedItems.length > 0 }));
+  if (cartBackBtn) cartBackBtn.addEventListener('click', () => journey.send('BACK', {
+    hasItems: state.extractedItems.length > 0,
+    hasBoard: !!(data.board && data.board.picks && data.board.picks.length),
+    via: data.cartVia,
+  }));
 
   const cartCheckoutBtn = $('#cart-checkout');
   if (cartCheckoutBtn) cartCheckoutBtn.addEventListener('click', () => {
@@ -1571,6 +1712,14 @@
 
     if (tool.name === 'create_theme') {
       const pref = inp.theme_preference || M.themeRequest(data.partyPlan);
+      if (isBoardMode()) {
+        if (!journey.can('DESIGN_BOARD')) {
+          return toolResult(tool, `Can't build a board right now — the user is ${M.STAGE_DESCRIPTION[journey.state]}.`, true);
+        }
+        closeChatDrawer();
+        startBoard(pref);
+        return toolResult(tool, `Building a mood board of real products for "${pref}".`);
+      }
       if (!journey.can('DESIGN')) {
         return toolResult(tool, `Can't open the theme designer right now — the user is ${M.STAGE_DESCRIPTION[journey.state]}. Try again once that finishes.`, true);
       }
@@ -1971,6 +2120,7 @@
 
     // Rebuild the persisted stages' screens so a resumed journey (and Back) has content.
     if (state.extractedItems.length) renderDecideScreen(state.extractedItems);
+    if (data.board) renderBoard();
     renderCart();
 
     // Restore chat transcript (the agent's API context was rebuilt from it in `state`)

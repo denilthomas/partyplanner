@@ -158,6 +158,26 @@
     </div>
   </div>
 
+  <!-- Mood board: real product listings, Pinterest-style -->
+  <div id="board-screen" class="fullscreen-overlay hidden">
+    <div class="fs-header">
+      <button class="fs-back" id="board-back" aria-label="Back">&larr;</button>
+      <div class="fs-titles">
+        <span class="fs-title" id="board-title">Your mood board</span>
+        <span class="fs-sub" id="board-sub"></span>
+      </div>
+    </div>
+    <div class="fs-body">
+      <p class="board-intro" id="board-intro"></p>
+      <div id="board-setup" class="board-setup"></div>
+      <div id="board-details" class="board-details"></div>
+    </div>
+    <div class="fs-footer board-footer">
+      <button class="btn btn-secondary" id="board-refresh">New board</button>
+      <button class="btn btn-primary" id="board-add" disabled>Add all to cart</button>
+    </div>
+  </div>
+
   <!-- ═══════════════════════════════════
        LAYER 5 — BOTTOM SHEET (3-state)
        ═══════════════════════════════════ -->

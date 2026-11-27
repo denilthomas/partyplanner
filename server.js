@@ -242,6 +242,7 @@ const THEME_TOOL = {
 
 function themePreferenceOf(plan, theme_preference) {
   if (theme_preference) return theme_preference;
+  if (plan && plan.themePreference) return plan.themePreference;
   const t = plan && plan.theme;
   if (!t) return '';
   return typeof t === 'string' ? t : (t.name || '');
@@ -359,67 +360,165 @@ const CART_TOOL = {
 };
 
 // ── Shopper Agent: Serper candidates + one batched curation call ──
+// Shared by /api/shop (pieces spotted in AI images) and /api/moodboard
+// (pieces planned up front). `theme` switches on mood-board cohesion rules.
+async function shopItems(items, plan = {}, theme = null) {
+  // 1) gather candidates per item (parallel)
+  const withCandidates = await Promise.all(items.map(async (item) => {
+    const q = item.search_query || item.item_name;
+    let candidates = await searchProducts(q, 5);
+    if (candidates.length === 0) candidates = await searchKits(q, 3);
+    return { item, candidates: candidates.slice(0, 5) };
+  }));
+
+  // 2) batched curation
+  const payload = withCandidates.map(({ item, candidates }, i) => ({
+    index: i,
+    item_name: item.item_name,
+    bucket: item.bucket,
+    shot: item.shot,
+    candidates: candidates.map((c, ci) => ({
+      candidate_index: ci,
+      title: c.name, price: c.price, retailer: c.retailer, rating: c.rating, has_image: !!c.image,
+    })),
+  }));
+  const themeLine = theme
+    ? `\nMood board theme: ${JSON.stringify({ name: theme.name, palette: theme.palette, signature_motif: theme.signature_motif })}`
+    : '';
+  const userMsg = `Party plan: ${JSON.stringify({ budget: plan.budget, guestCount: plan.guestCount, setting: plan.setting })}${themeLine}\n\nItems and their candidate products:\n${JSON.stringify(payload, null, 2)}`;
+  const result = await callAgentTool({
+    system: theme ? `${SHOPPER_SYSTEM}\n${SHOPPER_BOARD_RULES}` : SHOPPER_SYSTEM,
+    tool: CART_TOOL,
+    messages: [{ role: 'user', content: userMsg }],
+    max_tokens: 3072,
+  });
+
+  // 3) resolve picks back to real candidate products
+  const picks = [];
+  let subtotal = 0;
+  for (const pick of (result.picks || [])) {
+    const entry = withCandidates.find((w) => w.item.item_name === pick.item_name)
+      || withCandidates[picks.length];
+    if (!entry) continue;
+    const ci = pick.candidate_index;
+    const cand = (ci != null && ci >= 0) ? entry.candidates[ci] : null;
+    const quantity = Math.max(1, pick.quantity || 1);
+    const price = cand ? cand.price : (entry.item.estimated_price || 0);
+    const line_total = +(price * quantity).toFixed(2);
+    if (cand) subtotal += line_total;
+    picks.push({
+      item_name: entry.item.item_name,
+      bucket: entry.item.bucket,
+      shot: entry.item.shot || null,
+      product: cand ? { title: cand.name, retailer: cand.retailer, link: cand.url, price: cand.price, thumbnail: cand.image } : null,
+      pack_size: pick.pack_size || null,
+      quantity,
+      line_total,
+      reason: pick.reason || '',
+    });
+  }
+  return { picks, subtotal: +subtotal.toFixed(2), budget_note: result.budget_note || '' };
+}
+
 app.post('/api/shop', async (req, res) => {
   const { items = [], plan = {} } = req.body || {};
   if (!Array.isArray(items) || items.length === 0) {
     return res.status(400).json({ error: 'items array required' });
   }
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
   try {
-    // 1) gather candidates per item (parallel)
-    const withCandidates = await Promise.all(items.map(async (item) => {
-      const q = item.search_query || item.item_name;
-      let candidates = await searchProducts(q, 5);
-      if (candidates.length === 0) candidates = await searchKits(q, 3);
-      return { item, candidates: candidates.slice(0, 5) };
-    }));
-
-    // 2) batched curation
-    if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
-    const payload = withCandidates.map(({ item, candidates }, i) => ({
-      index: i,
-      item_name: item.item_name,
-      bucket: item.bucket,
-      candidates: candidates.map((c, ci) => ({
-        candidate_index: ci,
-        title: c.name, price: c.price, retailer: c.retailer, rating: c.rating,
-      })),
-    }));
-    const userMsg = `Party plan: ${JSON.stringify({ budget: plan.budget, guestCount: plan.guestCount, setting: plan.setting })}\n\nItems and their candidate products:\n${JSON.stringify(payload, null, 2)}`;
-    const result = await callAgentTool({
-      system: SHOPPER_SYSTEM,
-      tool: CART_TOOL,
-      messages: [{ role: 'user', content: userMsg }],
-      max_tokens: 3072,
-    });
-
-    // 3) resolve picks back to real candidate products
-    const picks = [];
-    let subtotal = 0;
-    for (const pick of (result.picks || [])) {
-      const entry = withCandidates.find((w) => w.item.item_name === pick.item_name)
-        || withCandidates[picks.length];
-      if (!entry) continue;
-      const ci = pick.candidate_index;
-      const cand = (ci != null && ci >= 0) ? entry.candidates[ci] : null;
-      const quantity = Math.max(1, pick.quantity || 1);
-      const price = cand ? cand.price : (entry.item.estimated_price || 0);
-      const line_total = +(price * quantity).toFixed(2);
-      if (cand) subtotal += line_total;
-      picks.push({
-        item_name: entry.item.item_name,
-        bucket: entry.item.bucket,
-        product: cand ? { title: cand.name, retailer: cand.retailer, link: cand.url, price: cand.price, thumbnail: cand.image } : null,
-        pack_size: pick.pack_size || null,
-        quantity,
-        line_total,
-        reason: pick.reason || '',
-      });
-    }
-    subtotal = +subtotal.toFixed(2);
-    res.json({ picks, subtotal, budget: plan.budget || null, budget_note: result.budget_note || '' });
+    const { picks, subtotal, budget_note } = await shopItems(items, plan);
+    res.json({ picks, subtotal, budget: plan.budget || null, budget_note });
   } catch (err) {
     console.error('[shop] failed:', err.message);
     res.status(500).json({ error: 'Shopping failed', detail: err.message, picks: [] });
+  }
+});
+
+// ── Mood Board: plan pieces → real products (no AI images) ──
+// The board is made of real retailer listings, so every picture is buyable
+// and shows its store and price. Claude curates for cohesion; it never
+// invents a product.
+const BOARD_PLANNER_SYSTEM = [
+  'You are the creative director for Utsav, an app that helps families throw beautiful parties at home with store-bought supplies.',
+  'Plan ONE cohesive, shoppable mood board for the party below. It will be built only from real product listings found by search, so you choose WHAT to look for, not what it looks like.',
+  '',
+  'RETURN',
+  '- name: a short, warm theme name (2-5 words). description: 1-2 sentences.',
+  '- palette: 3-5 hex colors, 1-2 main colors plus neutrals; no neon.',
+  '- signature_motif: one motif (e.g. "cherries", "bunnies", "daisies") or "none".',
+  '- pieces: 8-10 things to buy.',
+  '',
+  'PIECES',
+  '- 2-3 pieces with shot "setup": products sellers photograph as a styled party scene, such as a balloon garland arch kit, a backdrop banner or backdrop with stand, or a table decoration set. These are the big inspiration shots.',
+  '- 5-7 pieces with shot "detail": close-up items such as paper plates, napkins, cups, cake topper, centerpiece or bud vases, favor bags, straws or a small sign.',
+  '- Cover the wall or entrance, the table and the small accents; do not repeat the same kind of item.',
+  '- search_query: plain shopping words a Target/Walmart/Amazon search would match, always including the color words from the palette (e.g. "sage green and cream balloon garland arch kit", "pink gingham paper napkins").',
+  '- The motif appears on at most 3 pieces; the rest are solid or simple patterns in the palette, so the board feels styled, not themed-to-death.',
+  '- Never include licensed characters, brand names, food, or custom/personalized items.',
+  '- Scale to the plan: under $150 budget = 8 simple pieces; larger budgets can include richer setup pieces. Guest count does not change the piece list (the shopper sets quantities).',
+  '- bucket: one of tabletop, wall_backdrop, accent_decor, activity_favors.',
+].join('\n');
+
+const BOARD_TOOL = {
+  name: 'plan_board',
+  description: 'Plan a cohesive shoppable mood board: theme, palette and 8-10 pieces to search for.',
+  input_schema: {
+    type: 'object',
+    properties: {
+      name: { type: 'string' },
+      description: { type: 'string' },
+      palette: { type: 'array', items: { type: 'string' } },
+      signature_motif: { type: 'string' },
+      pieces: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            item_name: { type: 'string', description: 'Plain name, e.g. "balloon garland arch kit"' },
+            bucket: { type: 'string', enum: ['tabletop', 'wall_backdrop', 'accent_decor', 'activity_favors'] },
+            shot: { type: 'string', enum: ['setup', 'detail'] },
+            search_query: { type: 'string' },
+          },
+          required: ['item_name', 'bucket', 'shot', 'search_query'],
+        },
+      },
+    },
+    required: ['name', 'palette', 'pieces'],
+  },
+};
+
+const SHOPPER_BOARD_RULES = [
+  'MOOD BOARD MODE: these picks are shown together as a mood board, so visual cohesion matters as much as price.',
+  '- Prefer candidates whose titles match the board palette colors and motif; avoid clashing colors.',
+  '- Prefer candidates with has_image true; a pick without an image cannot appear on the board.',
+  '- For shot "setup" items, prefer complete kits/sets (they are usually photographed as styled scenes).',
+].join('\n');
+
+app.post('/api/moodboard', async (req, res) => {
+  const { plan = {}, theme_preference } = req.body || {};
+  if (!ANTHROPIC_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not configured' });
+  const pref = themePreferenceOf(plan, theme_preference);
+  try {
+    const userMsg = `Party plan:\n- Occasion: ${plan.eventType || '(not set)'}\n- Guests: ${plan.guestCount || '(not set)'}\n- Budget: ${plan.budget ? '$' + plan.budget : '(not set)'}\n- Setting: ${plan.setting || '(not set)'}\nTheme / vibe: ${pref || '(none given — choose a fitting one)'}`;
+    const board = await callAgentTool({
+      system: BOARD_PLANNER_SYSTEM,
+      tool: BOARD_TOOL,
+      messages: [{ role: 'user', content: userMsg }],
+    });
+    const pieces = (board.pieces || []).slice(0, 10);
+    if (!pieces.length) return res.status(502).json({ error: 'The planner returned no pieces' });
+    const { picks, subtotal, budget_note } = await shopItems(pieces, plan, board);
+    res.json({
+      theme: { name: board.name, description: board.description || '', palette: board.palette || [], signature_motif: board.signature_motif || '' },
+      picks,
+      subtotal,
+      budget: plan.budget || null,
+      budget_note,
+    });
+  } catch (err) {
+    console.error('[moodboard] failed:', err.message);
+    res.status(500).json({ error: 'Mood board failed', detail: err.message, picks: [] });
   }
 });
 
