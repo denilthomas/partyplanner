@@ -1216,16 +1216,58 @@
     return tile;
   }
 
+  function boardPendingTile(p, hero) {
+    const tile = document.createElement('div');
+    tile.className = 'board-tile board-pending' + (hero ? ' board-hero' : '');
+    tile.innerHTML = `<div class="board-skel ${hero ? 'board-skel-hero' : ''}" style="${hero ? '' : 'height:190px'}"></div>
+      <div class="board-caption">${escapeHtml(p.item_name)}</div>`;
+    return tile;
+  }
+
+  // Reads the NDJSON stream from /api/moodboard, calling onEvent per line.
+  // Resolves { error } on failure (HTTP error, network, or stream error).
+  async function streamBoard(body, onEvent) {
+    try {
+      const res = await fetch('/api/moodboard', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const type = res.headers.get('content-type') || '';
+      if (!res.ok || !type.includes('ndjson')) {
+        const d = await res.json().catch(() => ({}));
+        return { error: d.detail || d.error || `HTTP ${res.status}` };
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (value) buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) { try { if (onEvent(JSON.parse(line)) === false) { reader.cancel(); return {}; } } catch {} }
+        }
+        if (done) break;
+      }
+      return {};
+    } catch (err) {
+      return { error: err.message || 'Network error' };
+    }
+  }
+
   function renderBoard() {
     const b = data.board;
     if (!b) return;
     clearStageError('board-screen');
     const picks = b.picks || [];
     const removed = new Set(b.removed || []);
-    const visible = picks.map((p, i) => ({ p, i })).filter(({ p, i }) => p.product && !removed.has(i));
-    const stores = [...new Set(visible.map(({ p }) => (p.product.retailer || '').replace(/\.com$/i, '')).filter(Boolean))];
+    const visible = picks.map((p, i) => ({ p, i })).filter(({ p, i }) => (p.pending || p.product) && !removed.has(i));
+    const ready = visible.filter(({ p }) => p.product);
+    const loading = visible.length - ready.length;
+    const stores = [...new Set(ready.map(({ p }) => (p.product.retailer || '').replace(/\.com$/i, '')).filter(Boolean))];
     $('#board-title').textContent = (b.theme && b.theme.name) || 'Your mood board';
-    $('#board-sub').textContent = `${visible.length} real products${stores.length ? ' · ' + stores.slice(0, 3).join(', ') : ''}`;
+    $('#board-sub').textContent = loading
+      ? `Finding ${loading} more…`
+      : `${ready.length} real products${stores.length ? ' · ' + stores.slice(0, 3).join(', ') : ''}`;
     $('#board-intro').textContent = (b.theme && b.theme.description) || '';
 
     const setup = $('#board-setup');
@@ -1233,44 +1275,70 @@
     setup.innerHTML = '';
     details.innerHTML = '';
     visible.forEach(({ p, i }) => {
-      if (p.shot === 'setup') setup.appendChild(boardTile(p, i, true));
-      else details.appendChild(boardTile(p, i, false));
+      const tile = p.pending ? boardPendingTile(p, p.shot === 'setup') : boardTile(p, i, p.shot === 'setup');
+      (p.shot === 'setup' ? setup : details).appendChild(tile);
     });
 
-    const total = M.subtotal(M.normalizeCart(visible.map(({ p }) => p)));
-    boardAddBtn.disabled = visible.length === 0;
-    boardAddBtn.textContent = visible.length ? `Add all to cart · ${formatCurrency(total)}` : 'Add all to cart';
+    const total = M.subtotal(M.normalizeCart(ready.map(({ p }) => p)));
+    boardAddBtn.disabled = ready.length === 0 || loading > 0;
+    boardAddBtn.textContent = ready.length ? `Add all to cart · ${formatCurrency(total)}` : 'Add all to cart';
     boardRefreshBtn.disabled = false;
   }
 
   // Returns false if the journey can't start a board right now.
+  // The board appears as soon as the theme is planned; tiles fill in as each
+  // product search returns.
   function startBoard(pref) {
     if (!journey.send('DESIGN_BOARD')) return false;
     const token = ++boardReq;
     clearStageError('board-screen');
     renderBoardLoading();
-    postJson('/api/moodboard', { plan: data.partyPlan, theme_preference: pref }).then((d) => {
-      if (token !== boardReq) return; // superseded
-      const picks = (d.picks || []).filter((p) => p.product);
-      if (d.error || picks.length === 0) {
-        journey.send('FAILED');
-        $('#board-title').textContent = 'Your mood board';
-        $('#board-sub').textContent = '';
-        $('#board-intro').textContent = '';
-        $('#board-setup').innerHTML = '';
-        $('#board-details').innerHTML = '';
-        boardRefreshBtn.disabled = false;
-        showStageError('board-screen',
-          d.error ? `Couldn't build a board (${d.error}).` : 'No matching products found — try a different theme.',
-          () => startBoard(pref));
-        return;
-      }
-      data.board = { theme: d.theme || {}, picks, removed: [], budget: d.budget || null };
-      if (data.board.theme.name) data.partyPlan.theme = { name: data.board.theme.name, source: 'board', palette: data.board.theme.palette || [] };
+    let board = null;
+
+    const fail = (msg) => {
+      if (journey.state === 'boarding') journey.send('FAILED');
+      data.board = null;
       saveData(data);
-      renderPlanCard();
+      $('#board-title').textContent = 'Your mood board';
+      $('#board-sub').textContent = '';
+      $('#board-intro').textContent = '';
+      $('#board-setup').innerHTML = '';
+      $('#board-details').innerHTML = '';
+      boardAddBtn.disabled = true;
+      boardRefreshBtn.disabled = false;
+      showStageError('board-screen', msg, () => startBoard(pref));
+    };
+
+    streamBoard({ plan: data.partyPlan, theme_preference: pref }, (ev) => {
+      if (token !== boardReq) return false; // superseded or left
+      if (ev.type === 'theme') {
+        board = {
+          theme: ev.theme || {},
+          picks: (ev.pieces || []).map((p) => ({ item_name: p.item_name, bucket: p.bucket, shot: p.shot, pending: true })),
+          removed: [],
+          budget: data.partyPlan.budget || null,
+        };
+        data.board = board;
+        if (board.theme.name) data.partyPlan.theme = { name: board.theme.name, source: 'board', palette: board.theme.palette || [] };
+        renderPlanCard();
+        renderBoard();
+        journey.send('BOARD_READY');
+      } else if (ev.type === 'pick' && board && board.picks[ev.index]) {
+        board.picks[ev.index] = ev.pick;
+        renderBoard();
+      }
+      return true;
+    }).then(({ error }) => {
+      if (token !== boardReq) return;
+      if (board) board.picks = board.picks.map((p) => (p.pending ? { ...p, pending: false, product: null } : p)); // stream cut short
+      if (error && !board) return fail(`Couldn't build a board (${error}).`);
+      const removed = new Set(board.removed || []);
+      if (!board.picks.some((p) => p.product)) return fail('No matching products found — try a different theme.');
+      board.picks = board.picks.filter((p, i) => p.product && !removed.has(i));
+      board.removed = [];
+      data.board = board;
+      saveData(data);
       renderBoard();
-      journey.send('BOARD_READY');
     });
     return true;
   }

@@ -20,8 +20,15 @@ const BOARD = {
   subtotal: 65.98, budget: 200,
 };
 
+// The server streams: theme, then one pick per piece, then done.
+const stream = (b) => [
+  { type: 'theme', theme: b.theme, pieces: b.picks.map((p, index) => ({ index, item_name: p.item_name, bucket: p.bucket, shot: p.shot })) },
+  ...b.picks.map((pick, index) => ({ type: 'pick', index, pick })),
+  { type: 'done', subtotal: b.subtotal, budget: b.budget },
+];
+
 async function openBoardApp(routes = {}, path = '/?board') {
-  const ctx = await h.openApp(browser, server.url, { routes: { '/api/moodboard': () => ({ delay: 300, json: BOARD }), ...routes } });
+  const ctx = await h.openApp(browser, server.url, { routes: { '/api/moodboard': () => ({ delay: 300, ndjson: stream(BOARD) }), ...routes } });
   if (path !== '/') {
     await ctx.page.goto(server.url + path, { waitUntil: 'domcontentloaded' });
     await ctx.page.waitForSelector('#plan-cards .pp-row');
@@ -87,12 +94,23 @@ test('board survives a reload', async () => {
 
 test('a failed board shows a retryable error', async () => {
   let n = 0;
-  const { page } = await openBoardApp({ '/api/moodboard': () => (n++ === 0 ? { status: 500, json: { error: 'Mood board failed' } } : { json: BOARD }) });
+  const { page } = await openBoardApp({ '/api/moodboard': () => (n++ === 0 ? { status: 500, json: { error: 'Mood board failed' } } : { ndjson: stream(BOARD) }) });
   await h.fillPlan(page);
   await h.tap(page, '#design-theme-btn');
   await h.waitFor(page, () => !!document.querySelector('#board-screen .stage-error'));
   await page.$eval('#board-screen .stage-error button', (b) => b.click());
   await h.waitFor(page, () => document.querySelectorAll('.board-tile:not(.board-skel)').length === 4);
+  await page.close();
+});
+
+test('a board whose searches all come back empty shows an error, not a blank board', async () => {
+  const empty = { ...BOARD, picks: BOARD.picks.map((p) => ({ ...p, product: null })) };
+  const { page } = await openBoardApp({ '/api/moodboard': () => ({ ndjson: stream(empty) }) });
+  await h.fillPlan(page);
+  await h.tap(page, '#design-theme-btn');
+  await h.waitFor(page, () => !!document.querySelector('#board-screen .stage-error'));
+  assert.equal((await page.$$('.board-tile')).length, 0);
+  assert.equal(await page.$eval('#board-add', (b) => b.disabled), true);
   await page.close();
 });
 

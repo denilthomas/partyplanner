@@ -1,5 +1,5 @@
-// /api/moodboard: Claude plans pieces → Serper finds real listings →
-// Claude picks a cohesive set. All three upstreams are stubbed via fetch.
+// /api/moodboard: Claude plans pieces → Serper finds real listings, streamed
+// back as NDJSON. One Claude call only. Upstreams are stubbed via fetch.
 process.env.ANTHROPIC_API_KEY = 'sk-test';
 process.env.SERPER_API_KEY = 'serper-test';
 
@@ -18,7 +18,7 @@ const BOARD = {
   signature_motif: 'bunnies',
   pieces: [
     { item_name: 'balloon garland arch kit', bucket: 'wall_backdrop', shot: 'setup', search_query: 'pastel yellow sage blue balloon garland arch kit' },
-    { item_name: 'bunny paper plates', bucket: 'tabletop', shot: 'detail', search_query: 'bunny print paper plates pastel' },
+    { item_name: 'bunny paper plates', bucket: 'tabletop', shot: 'detail', search_query: 'bunny print paper plates pastel', quantity: 2 },
     { item_name: 'gingham tablecloth', bucket: 'tabletop', shot: 'detail', search_query: 'blue gingham plastic tablecloth' },
   ],
 };
@@ -42,7 +42,9 @@ before(async () => {
     if (u.startsWith('https://google.serper.dev')) {
       const q = JSON.parse(init.body).q;
       serperQueries.push(q);
+      if (q.includes('tablecloth')) return new Response(JSON.stringify({ shopping: [] }), { status: 200 });
       return new Response(JSON.stringify({ shopping: [
+        { title: `${q} no photo`, price: '$9.99', source: 'Walmart', link: 'https://example.com/x' },
         { title: `${q} A`, price: '$12.99', source: 'Amazon.com', link: 'https://example.com/a', imageUrl: 'https://img.example.com/a.jpg' },
         { title: `${q} B`, price: '$24.50', source: 'Target', link: 'https://example.com/b', imageUrl: 'https://img.example.com/b.jpg' },
       ] }), { status: 200 });
@@ -55,29 +57,42 @@ before(async () => {
 });
 after(() => { server.close(); global.fetch = realFetch; });
 
-test('builds a board of real products, with no image generation', async () => {
+test('streams a board of real products: theme first, then one pick per piece', async () => {
   const r = await realFetch(`${base}/api/moodboard`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ plan: { eventType: 'Birthday', guestCount: 40, budget: 400, setting: 'indoor', themePreference: 'garden bunny' } }),
   });
   assert.equal(r.status, 200);
-  const d = await r.json();
+  assert.match(r.headers.get('content-type'), /ndjson/);
+  const lines = (await r.text()).trim().split('\n').map((l) => JSON.parse(l));
 
-  assert.equal(d.theme.name, 'Garden Bunny ONE');
-  assert.deepEqual(serperQueries, BOARD.pieces.map((p) => p.search_query), 'one shopping search per planned piece');
+  assert.equal(lines[0].type, 'theme');
+  assert.equal(lines[0].theme.name, 'Garden Bunny ONE');
+  assert.deepEqual(lines[0].pieces.map((p) => p.shot), ['setup', 'detail', 'detail']);
+  assert.equal(lines.at(-1).type, 'done');
+  const picks = lines.filter((l) => l.type === 'pick');
+  assert.equal(picks.length, 3);
 
-  const garland = d.picks.find((p) => p.item_name === 'balloon garland arch kit');
-  assert.equal(garland.shot, 'setup');
-  assert.deepEqual(garland.product, { title: 'pastel yellow sage blue balloon garland arch kit B', retailer: 'Target', link: 'https://example.com/b', price: 24.5, thumbnail: 'https://img.example.com/b.jpg' });
-  assert.equal(d.picks.find((p) => p.item_name === 'gingham tablecloth').product, null, 'no fake product when nothing matched');
-  assert.equal(d.subtotal, 50.48);
-
-  // planner gets the plan; shopper gets the board theme + cohesion rules
+  assert.equal(anthropicCalls.length, 1, 'one Claude call: the planner; no shopper pass');
   assert.match(anthropicCalls[0].messages[0].content, /Guests: 40/);
   assert.match(anthropicCalls[0].messages[0].content, /garden bunny/);
-  assert.match(anthropicCalls[1].system, /MOOD BOARD MODE/);
-  assert.match(anthropicCalls[1].messages[0].content, /signature_motif/);
-  assert.match(anthropicCalls[1].messages[0].content, /"has_image": true/);
+
+  const byIndex = Object.fromEntries(picks.map((l) => [l.index, l.pick]));
+  // skips the result with no photo, takes the next one
+  assert.deepEqual(byIndex[0].product, { title: 'pastel yellow sage blue balloon garland arch kit A', retailer: 'Amazon.com', link: 'https://example.com/a', price: 12.99, thumbnail: 'https://img.example.com/a.jpg' });
+  assert.equal(byIndex[1].quantity, 2, 'planner sets quantity');
+  assert.equal(byIndex[2].product, null, 'no fake product when nothing matched');
+  assert.equal(lines.at(-1).subtotal, 38.97);
+  assert.ok(lines.at(-1).timings.total_ms >= 0);
+});
+
+test('planner failure is a plain JSON error', async () => {
+  const before = global.fetch;
+  global.fetch = async (url, init) => (String(url).startsWith('https://api.anthropic.com') ? new Response('{"error":{"message":"overloaded"}}', { status: 529 }) : before(url, init));
+  const r = await realFetch(`${base}/api/moodboard`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+  global.fetch = before;
+  assert.equal(r.status, 500);
+  assert.equal((await r.json()).error, 'Mood board failed');
 });
 
 test('/api/shop keeps working without board rules', async () => {

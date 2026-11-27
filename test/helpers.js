@@ -51,7 +51,7 @@ const FIXTURES = {
 /**
  * Open the app with mocked AI endpoints.
  * @param {object} opts
- *   routes: { '/api/x': (body, ctx) => ({ status?, json, delay? }) } overrides
+ *   routes: { '/api/x': (body, ctx) => ({ status?, json | ndjson: [lines], delay? }) } overrides
  *   storage: object to seed into localStorage('partyplanner')
  */
 async function openApp(browser, baseUrl, opts = {}) {
@@ -83,6 +83,7 @@ async function openApp(browser, baseUrl, opts = {}) {
     calls.push({ path: u.pathname, body });
     const r = await handler(body, { calls });
     if (r.delay) await new Promise((res) => setTimeout(res, r.delay));
+    if (r.ndjson) return req.respond({ status: r.status || 200, contentType: 'application/x-ndjson', body: r.ndjson.map((l) => JSON.stringify(l)).join('\n') + '\n' });
     req.respond({ status: r.status || 200, contentType: 'application/json', body: JSON.stringify(r.json) });
   });
 
