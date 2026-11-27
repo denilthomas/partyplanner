@@ -82,6 +82,17 @@ test('remove a tile, add all to cart, and Back returns to the board', async () =
   await page.close();
 });
 
+test("the board's name never replaces the theme the user picked", async () => {
+  const { page } = await openBoardApp();
+  await buildBoard(page);
+  await h.tap(page, '#board-back');
+  await h.waitFor(page, () => document.body.dataset.stage === 'home');
+  const row = await page.$$eval('#plan-cards .pp-row', (rows) => rows.map((r) => r.textContent.replace(/\s+/g, ' ').trim()).find((t) => t.startsWith('Theme')));
+  assert.match(row, /Boho/);
+  assert.doesNotMatch(row, /Garden Bunny/);
+  await page.close();
+});
+
 test('board survives a reload', async () => {
   const { page } = await openBoardApp();
   await buildBoard(page);

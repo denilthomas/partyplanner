@@ -1169,6 +1169,11 @@
     }
   })();
   function isBoardMode() { return data.mode === 'board'; }
+  // Boards built before this fix wrote their name over the user's theme.
+  if (data.partyPlan && data.partyPlan.theme && data.partyPlan.theme.source === 'board') {
+    data.partyPlan.theme = null;
+    saveData(data);
+  }
   if (designThemeBtn && isBoardMode()) designThemeBtn.innerHTML = 'Build my board &rarr;';
 
   let boardReq = 0;
@@ -1319,8 +1324,7 @@
           budget: data.partyPlan.budget || null,
         };
         data.board = board;
-        if (board.theme.name) data.partyPlan.theme = { name: board.theme.name, source: 'board', palette: board.theme.palette || [] };
-        renderPlanCard();
+        // The board's name stays on the board; the plan keeps the theme the user picked.
         renderBoard();
         journey.send('BOARD_READY');
       } else if (ev.type === 'pick' && board && board.picks[ev.index]) {
