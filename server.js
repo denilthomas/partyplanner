@@ -500,15 +500,22 @@ const CUSTOM_ITEM = /\b(custom(i[sz]ed|izable)?|personali[sz]ed|personali[sz]abl
 // marketplace sellers are where knock-offs live.
 const LICENSED_STORES = new Set(['Target', 'Walmart', 'Amazon']);
 
-function boardCandidate(candidates, piece = {}) {
-  return candidates.find((c) => c.image && c.price > 0 && !CUSTOM_ITEM.test(c.name)
-    && (!piece.licensed || LICENSED_STORES.has(c.retailer))) || null;
+// `used` holds listings already on this board, so one product never fills
+// two tiles (a garland kit often matches "garland" and "backdrop" searches).
+const listingKey = (c) => (c.url || '').split('?')[0] || String(c.name).toLowerCase().slice(0, 60);
+
+function boardCandidate(candidates, piece = {}, used = new Set()) {
+  const c = candidates.find((c) => c.image && c.price > 0 && !CUSTOM_ITEM.test(c.name)
+    && (!piece.licensed || LICENSED_STORES.has(c.retailer))
+    && !used.has(listingKey(c)) && !used.has(String(c.name).toLowerCase().slice(0, 60))) || null;
+  if (c) { used.add(listingKey(c)); used.add(String(c.name).toLowerCase().slice(0, 60)); }
+  return c;
 }
 
-async function findBoardProduct(piece) {
+async function findBoardProduct(piece, used) {
   const q = piece.search_query || piece.item_name;
-  let c = boardCandidate(await searchProducts(q, 5), piece);
-  if (!c) c = boardCandidate(await searchKits(q, 3), piece);
+  let c = boardCandidate(await searchProducts(q, 5), piece, used);
+  if (!c) c = boardCandidate(await searchKits(q, 3), piece, used);
   return c;
 }
 
@@ -553,9 +560,10 @@ app.post('/api/moodboard', async (req, res) => {
 
   let subtotal = 0;
   let tFirst = null;
+  const used = new Set();
   await Promise.all(pieces.map(async (piece, index) => {
     let c = null;
-    try { c = await findBoardProduct(piece); } catch (err) { console.error('[moodboard] search failed:', err.message); }
+    try { c = await findBoardProduct(piece, used); } catch (err) { console.error('[moodboard] search failed:', err.message); }
     const quantity = Math.max(1, Math.min(20, parseInt(piece.quantity, 10) || 1));
     const line_total = c ? +(c.price * quantity).toFixed(2) : 0;
     subtotal += line_total;

@@ -56,8 +56,8 @@ before(async () => {
       return new Response(JSON.stringify({ shopping: [
         { title: `${q} no photo`, price: '$9.99', source: 'Walmart', link: 'https://example.com/x' },
         { title: `Personalized ${q}`, price: '$19.99', source: 'Etsy - PopFestCo', link: 'https://example.com/c', imageUrl: 'https://img.example.com/c.jpg' },
-        { title: `${q} A`, price: '$12.99', source: 'Amazon.com', link: 'https://example.com/a', imageUrl: 'https://img.example.com/a.jpg' },
-        { title: `${q} B`, price: '$24.50', source: 'Target', link: 'https://example.com/b', imageUrl: 'https://img.example.com/b.jpg' },
+        { title: `${q} A`, price: '$12.99', source: 'Amazon.com', link: `https://example.com/${encodeURIComponent(q)}/a`, imageUrl: 'https://img.example.com/a.jpg' },
+        { title: `${q} B`, price: '$24.50', source: 'Target', link: `https://example.com/${encodeURIComponent(q)}/b`, imageUrl: 'https://img.example.com/b.jpg' },
       ] }), { status: 200 });
     }
     return realFetch(url, init);
@@ -90,7 +90,7 @@ test('streams a board of real products: theme first, then one pick per piece', a
 
   const byIndex = Object.fromEntries(picks.map((l) => [l.index, l.pick]));
   // skips the result with no photo, takes the next one
-  assert.deepEqual(byIndex[0].product, { title: 'pastel yellow sage blue balloon garland arch kit A', retailer: 'Amazon', link: 'https://example.com/a', price: 12.99, thumbnail: 'https://img.example.com/a.jpg' });
+  assert.deepEqual(byIndex[0].product, { title: 'pastel yellow sage blue balloon garland arch kit A', retailer: 'Amazon', link: 'https://example.com/pastel%20yellow%20sage%20blue%20balloon%20garland%20arch%20kit/a', price: 12.99, thumbnail: 'https://img.example.com/a.jpg' });
   assert.equal(byIndex[1].quantity, 2, 'planner sets quantity');
   assert.equal(byIndex[2].product, null, 'no fake product when nothing matched');
   assert.equal(lines.at(-1).subtotal, 38.97);
@@ -123,6 +123,16 @@ test('licensed pieces come only from big stores; the planner is told to keep the
   const { BOARD_PLANNER_SYSTEM } = require('../server.js')._board;
   assert.match(BOARD_PLANNER_SYSTEM, /OFFICIAL licensed party supplies/);
   assert.doesNotMatch(BOARD_PLANNER_SYSTEM, /Never include licensed characters/);
+});
+
+test('one listing never fills two tiles', () => {
+  const { boardCandidate } = require('../server.js')._board;
+  const kit = { name: 'Dinosaur Balloon Garland Arch Kit', price: 52.99, retailer: 'Etsy', image: 'k', url: 'https://etsy.com/l/1?ref=a' };
+  const other = { name: 'Green dinosaur backdrop', price: 20, retailer: 'Target', image: 'b', url: 'https://target.com/b' };
+  const used = new Set();
+  assert.equal(boardCandidate([kit, other], {}, used), kit);
+  assert.equal(boardCandidate([{ ...kit, url: 'https://etsy.com/l/1?ref=b' }, other], {}, used), other, 'same listing, different tracking link');
+  assert.equal(boardCandidate([kit], {}, used), null);
 });
 
 test('planner failure is a plain JSON error', async () => {
