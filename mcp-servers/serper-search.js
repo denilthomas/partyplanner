@@ -23,6 +23,18 @@ const APPROVED_RETAILERS = [
 // Helpers
 // ---------------------------------------------------------------------------
 
+const RETAILER_NAMES = {
+  amazon: 'Amazon', walmart: 'Walmart', target: 'Target', etsy: 'Etsy', michaels: 'Michaels',
+  'hobby lobby': 'Hobby Lobby', 'ace hardware': 'Ace Hardware', 'home depot': 'Home Depot',
+};
+
+// "Etsy - PopFestCo", "Amazon.com - Seller" → "Etsy", "Amazon"
+function retailerName(source) {
+  const lower = String(source || '').toLowerCase();
+  const key = APPROVED_RETAILERS.find(r => lower.includes(r));
+  return key ? RETAILER_NAMES[key] : (source || 'Google Shopping');
+}
+
 function isApprovedRetailer(source) {
   if (!source) return false;
   const lower = source.toLowerCase();
@@ -124,7 +136,7 @@ async function searchProducts(query, maxResults = 5) {
       url: item.link || '',
       image: item.imageUrl || item.thumbnail || '',
       rating: item.rating || null,
-      retailer: item.source || 'Google Shopping',
+      retailer: retailerName(item.source),
     }));
   } catch (err) {
     console.error('[serper] failed to parse shopping results:', err.message);
@@ -179,7 +191,7 @@ async function searchKits(query, maxResults = 3) {
       url: item.link || '',
       image: item.imageUrl || item.thumbnail || '',
       rating: item.rating || null,
-      retailer: item.source || 'Google Shopping',
+      retailer: retailerName(item.source),
     }));
   } catch (err) {
     console.error('[serper] failed to parse kit results:', err.message);
@@ -187,4 +199,35 @@ async function searchKits(query, maxResults = 3) {
   }
 }
 
-module.exports = { searchInspiration, searchProducts, searchKits };
+// ---------------------------------------------------------------------------
+// findFullImage — the full-size photo for a product we already picked
+// ---------------------------------------------------------------------------
+//
+// Shopping results only carry small thumbnails. An image search for the exact
+// product title on its store's site returns the original listing photo.
+// Only accepted when the store matches and the titles clearly overlap, so we
+// never show a photo of a different product. Returns '' when unsure.
+
+const words = (t) => new Set(String(t || '').toLowerCase().match(/[a-z0-9]{3,}/g) || []);
+
+function titleOverlap(a, b) {
+  const A = words(a), B = words(b);
+  if (!A.size || !B.size) return 0;
+  let n = 0;
+  for (const w of A) if (B.has(w)) n++;
+  return n / Math.min(A.size, B.size);
+}
+
+async function findFullImage(title, retailer) {
+  const site = { Amazon: 'amazon.com', Walmart: 'walmart.com', Target: 'target.com', Etsy: 'etsy.com', Michaels: 'michaels.com', 'Hobby Lobby': 'hobbylobby.com' }[retailer];
+  if (!site || !title) return '';
+  const q = `${String(title).slice(0, 90)} site:${site}`;
+  const data = await serperPost(IMAGES_ENDPOINT, { q, num: 5 });
+  const hit = ((data && data.images) || []).find(img =>
+    String(img.domain || img.link || '').includes(site.split('.')[0])
+    && (img.imageWidth || 0) >= 500
+    && titleOverlap(img.title, title) >= 0.6);
+  return hit ? hit.imageUrl : '';
+}
+
+module.exports = { searchInspiration, searchProducts, searchKits, findFullImage, retailerName, titleOverlap };

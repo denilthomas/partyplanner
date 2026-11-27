@@ -3330,3 +3330,15 @@ body[data-stage] .bucket-badge { color: var(--text); background: rgba(0, 0, 0, 0
 .board-skel-hero { height: 340px; }
 @keyframes boardShimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 .board-footer .btn-secondary { flex: 0 0 auto; padding-left: 18px; padding-right: 18px; }
+
+/* Board: the chat button lives at the start of the footer row instead of
+   floating over the photos and their store/price tags. */
+body[data-stage="board"] .board-footer,
+body[data-stage="boarding"] .board-footer { padding-left: 76px; }
+body[data-stage="board"]:not([data-stage="home"]) .chat-open-btn,
+body[data-stage="boarding"]:not([data-stage="home"]) .chat-open-btn {
+  bottom: calc((var(--fab-bottom, 72px) - 48px) / 2 + var(--safe-bottom));
+}
+/* Store tag: one line, never wider than the photo */
+.board-store { max-width: calc(100% - 16px); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#board-sub { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

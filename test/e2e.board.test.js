@@ -93,6 +93,27 @@ test("the board's name never replaces the theme the user picked", async () => {
   await page.close();
 });
 
+test('a full-size photo replaces the thumbnail, and the chat button stays off the photos', async () => {
+  const lines = stream(BOARD);
+  const big = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="1000"/>');
+  lines.splice(lines.length - 1, 0, { type: 'image', index: 0, url: big });
+  const { page } = await openBoardApp({ '/api/moodboard': () => ({ ndjson: lines }) });
+  await buildBoard(page);
+  await h.waitFor(page, () => document.querySelector('#board-setup img').src.startsWith('data:image/svg'));
+
+  const overlap = await page.evaluate(() => {
+    const fab = document.querySelector('.chat-open-btn').getBoundingClientRect();
+    const footer = document.querySelector('.board-footer').getBoundingClientRect();
+    const btns = [...document.querySelectorAll('.board-footer .btn')].map((b) => b.getBoundingClientRect());
+    const hits = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+    return { inFooter: fab.top >= footer.top - 1 && fab.bottom <= footer.bottom + 1, onButton: btns.some((b) => hits(fab, b)) };
+  });
+  assert.deepEqual(overlap, { inFooter: true, onButton: false });
+  assert.equal((await h.hitTarget(page, '#board-add')).ok, true);
+  assert.equal((await h.hitTarget(page, '#board-refresh')).ok, true);
+  await page.close();
+});
+
 test('board survives a reload', async () => {
   const { page } = await openBoardApp();
   await buildBoard(page);

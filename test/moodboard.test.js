@@ -39,12 +39,23 @@ before(async () => {
         ], budget_note: 'Under budget' };
       return new Response(JSON.stringify({ content: [{ type: 'tool_use', id: 't', name: tool, input }] }), { status: 200 });
     }
+    if (u.startsWith('https://google.serper.dev/images')) {
+      const q = JSON.parse(init.body).q;
+      // full-size photo only for the garland; plates get a photo of a different product
+      if (q.includes('garland')) return new Response(JSON.stringify({ images: [
+        { title: 'Pastel yellow sage blue balloon garland arch kit A', imageUrl: 'https://img.example.com/a-full.jpg', imageWidth: 1200, domain: 'www.amazon.com' },
+      ] }), { status: 200 });
+      return new Response(JSON.stringify({ images: [
+        { title: 'Dinosaur napkins 20 pack', imageUrl: 'https://img.example.com/wrong.jpg', imageWidth: 1200, domain: 'www.amazon.com' },
+      ] }), { status: 200 });
+    }
     if (u.startsWith('https://google.serper.dev')) {
       const q = JSON.parse(init.body).q;
       serperQueries.push(q);
       if (q.includes('tablecloth')) return new Response(JSON.stringify({ shopping: [] }), { status: 200 });
       return new Response(JSON.stringify({ shopping: [
         { title: `${q} no photo`, price: '$9.99', source: 'Walmart', link: 'https://example.com/x' },
+        { title: `Personalized ${q}`, price: '$19.99', source: 'Etsy - PopFestCo', link: 'https://example.com/c', imageUrl: 'https://img.example.com/c.jpg' },
         { title: `${q} A`, price: '$12.99', source: 'Amazon.com', link: 'https://example.com/a', imageUrl: 'https://img.example.com/a.jpg' },
         { title: `${q} B`, price: '$24.50', source: 'Target', link: 'https://example.com/b', imageUrl: 'https://img.example.com/b.jpg' },
       ] }), { status: 200 });
@@ -79,11 +90,25 @@ test('streams a board of real products: theme first, then one pick per piece', a
 
   const byIndex = Object.fromEntries(picks.map((l) => [l.index, l.pick]));
   // skips the result with no photo, takes the next one
-  assert.deepEqual(byIndex[0].product, { title: 'pastel yellow sage blue balloon garland arch kit A', retailer: 'Amazon.com', link: 'https://example.com/a', price: 12.99, thumbnail: 'https://img.example.com/a.jpg' });
+  assert.deepEqual(byIndex[0].product, { title: 'pastel yellow sage blue balloon garland arch kit A', retailer: 'Amazon', link: 'https://example.com/a', price: 12.99, thumbnail: 'https://img.example.com/a.jpg' });
   assert.equal(byIndex[1].quantity, 2, 'planner sets quantity');
   assert.equal(byIndex[2].product, null, 'no fake product when nothing matched');
   assert.equal(lines.at(-1).subtotal, 38.97);
+
+  // full-size photo only when the store and title match
+  const images = lines.filter((l) => l.type === 'image');
+  assert.deepEqual(images.map((l) => [l.index, l.url]), [[0, 'https://img.example.com/a-full.jpg']]);
+  assert.ok(lines.indexOf(images[0]) < lines.length - 1, 'image arrives before done');
   assert.ok(lines.at(-1).timings.total_ms >= 0);
+});
+
+test('store names are clean and personalized listings are skipped', () => {
+  const { retailerName, titleOverlap } = require('../mcp-servers/serper-search');
+  assert.equal(retailerName('Etsy - PopFestCo'), 'Etsy');
+  assert.equal(retailerName('Amazon.com - Seller'), 'Amazon');
+  assert.equal(retailerName('Walmart - Olexman'), 'Walmart');
+  assert.ok(titleOverlap('Pastel Balloon Garland Arch Kit 120 pcs', 'pastel balloon garland arch kit') >= 0.6);
+  assert.ok(titleOverlap('Dinosaur napkins 20 pack', 'bunny paper plates') < 0.6);
 });
 
 test('planner failure is a plain JSON error', async () => {

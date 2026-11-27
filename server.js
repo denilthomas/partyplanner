@@ -3,7 +3,7 @@ const path = require('path');
 const { analyzeSpace, extractItems } = require('./mcp-servers/gemini-vision');
 const { generateImages } = require('./mcp-servers/gemini-image');
 const themeStore = require('./mcp-servers/theme-store');
-const { searchProducts, searchKits } = require('./mcp-servers/serper-search');
+const { searchProducts, searchKits, findFullImage } = require('./mcp-servers/serper-search');
 const { buildCheckoutPlan, createUCPCheckout, completeUCPCheckout } = require('./mcp-servers/ucp-checkout');
 
 const app = express();
@@ -449,7 +449,7 @@ const BOARD_PLANNER_SYSTEM = [
   '- Cover the wall or entrance, the table and the small accents; do not repeat the same kind of item.',
   '- search_query: plain shopping words a Target/Walmart/Amazon search would match, always including the color words from the palette (e.g. "sage green and cream balloon garland arch kit", "pink gingham paper napkins").',
   '- The motif appears on at most 3 pieces; the rest are solid or simple patterns in the palette, so the board feels styled, not themed-to-death.',
-  '- Never include licensed characters, brand names, food, or custom/personalized items.',
+  '- Never include licensed characters, brand names, food, or custom/personalized items, and never put words like "custom" or "personalized" in a search_query.',
   '- Scale to the plan: under $150 budget = 8 simple pieces; larger budgets can include richer setup pieces.',
   '- quantity: packs to buy for the guest count, assuming typical pack sizes (plates/cups/napkins come in 16-24; favor bags in 12-24). Kits, backdrops, toppers and signs: 1. If unsure, 1.',
   '- bucket: one of tabletop, wall_backdrop, accent_decor, activity_favors.',
@@ -487,8 +487,11 @@ const BOARD_TOOL = {
 
 // The top search result that has a photo — a tile without an image can't
 // be on the board. Search order is already relevance order.
+// Personalized listings ("Happy Birthday Sheppard") can't be bought as shown.
+const CUSTOM_ITEM = /\b(custom(i[sz]ed|izable)?|personali[sz]ed|personali[sz]able|your (name|text|photo)|any (name|age)|monogram(med)?|name banner|made to order)\b/i;
+
 function boardCandidate(candidates) {
-  return candidates.find((c) => c.image && c.price > 0) || null;
+  return candidates.find((c) => c.image && c.price > 0 && !CUSTOM_ITEM.test(c.name)) || null;
 }
 
 async function findBoardProduct(piece) {
@@ -501,6 +504,7 @@ async function findBoardProduct(piece) {
 // Streams newline-delimited JSON so the phone can paint as results land:
 //   {type:'theme', theme, pieces}  → after the planner (~a few seconds)
 //   {type:'pick', index, pick}     → one per piece, as each search returns
+//   {type:'image', index, url}     → full-size listing photo, when one is found
 //   {type:'done', subtotal, budget, timings}
 // Errors before the first line are a normal JSON error response.
 app.post('/api/moodboard', async (req, res) => {
@@ -558,6 +562,12 @@ app.post('/api/moodboard', async (req, res) => {
         reason: '',
       },
     });
+    if (c) {
+      try {
+        const url = await findFullImage(c.name, c.retailer);
+        if (url && url !== c.image) send({ type: 'image', index, url });
+      } catch (err) { console.error('[moodboard] full image failed:', err.message); }
+    }
   }));
   const timings = { plan_ms: tPlan, first_product_ms: tFirst, total_ms: Date.now() - t0 };
   console.log('[moodboard] timings', JSON.stringify(timings));

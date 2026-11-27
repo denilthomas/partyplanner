@@ -1202,6 +1202,7 @@
     const prod = p.product;
     const tile = document.createElement('div');
     tile.className = 'board-tile' + (hero ? ' board-hero' : '');
+    tile.dataset.index = index;
     tile.innerHTML = `
       <a class="board-img" href="${escapeHtml(prod.link || '#')}" target="_blank" rel="noopener">
         <img src="${escapeHtml(prod.thumbnail || '')}" alt="${escapeHtml(prod.title || p.item_name)}" loading="lazy">
@@ -1211,6 +1212,7 @@
       <button class="board-remove" aria-label="Remove from board">✕</button>`;
     const img = tile.querySelector('img');
     img.addEventListener('error', () => {
+      if (prod.thumb_small && img.src !== prod.thumb_small) { img.src = prod.thumb_small; return; }
       img.replaceWith(Object.assign(document.createElement('div'), { className: 'board-noimg', textContent: p.item_name }));
     });
     tile.querySelector('.board-remove').addEventListener('click', () => {
@@ -1272,7 +1274,7 @@
     $('#board-title').textContent = (b.theme && b.theme.name) || 'Your mood board';
     $('#board-sub').textContent = loading
       ? `Finding ${loading} more…`
-      : `${ready.length} real products${stores.length ? ' · ' + stores.slice(0, 3).join(', ') : ''}`;
+      : `${ready.length} real product${ready.length === 1 ? '' : 's'}${stores.length ? ' · ' + stores.slice(0, 3).join(', ') : ''}`;
     $('#board-intro').textContent = (b.theme && b.theme.description) || '';
 
     const setup = $('#board-setup');
@@ -1330,6 +1332,17 @@
       } else if (ev.type === 'pick' && board && board.picks[ev.index]) {
         board.picks[ev.index] = ev.pick;
         renderBoard();
+      } else if (ev.type === 'image' && board && board.picks[ev.index] && board.picks[ev.index].product) {
+        const pick = board.picks[ev.index];
+        const hi = new Image();
+        hi.onload = () => {
+          if (token !== boardReq) return;
+          pick.product = { ...pick.product, thumbnail: ev.url, thumb_small: pick.product.thumbnail };
+          const img = document.querySelector(`.board-tile[data-index="${ev.index}"] img`);
+          if (img) img.src = ev.url;
+          if (data.board === board) saveData(data);
+        };
+        hi.src = ev.url; // if it never loads, the small photo stays
       }
       return true;
     }).then(({ error }) => {
