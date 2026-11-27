@@ -101,6 +101,11 @@ test('a full-size photo replaces the thumbnail, and the chat button stays off th
   await buildBoard(page);
   await h.waitFor(page, () => document.querySelector('#board-setup img').src.startsWith('data:image/svg'));
 
+  await h.waitFor(page, () => {
+    const fab = document.querySelector('.chat-open-btn').getBoundingClientRect();
+    const footer = document.querySelector('.board-footer').getBoundingClientRect();
+    return fab.top >= footer.top - 1;
+  });
   const overlap = await page.evaluate(() => {
     const fab = document.querySelector('.chat-open-btn').getBoundingClientRect();
     const footer = document.querySelector('.board-footer').getBoundingClientRect();
